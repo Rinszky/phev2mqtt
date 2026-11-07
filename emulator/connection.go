@@ -24,13 +24,15 @@ const (
 func NewConnection(conn net.Conn, car *Car) *Connection {
 	log.Infof("Connection received!\n")
 	return &Connection{
-		state: conClosed,
-		car:   car,
-		conn:  conn,
-		key:   &protocol.SecurityKey{},
-		Send:  make(chan *protocol.PhevMessage, 5),
-
-		listeners: []*client.Listener{},
+		state:          conClosed,
+		car:            car,
+		conn:           conn,
+		key:            &protocol.SecurityKey{},
+		Send:           make(chan *protocol.PhevMessage, 64),
+		done:           make(chan struct{}),
+		listeners:      []*client.Listener{},
+		stagedSettings: make(map[byte]byte),
+		startReqCmd:    protocol.CmdInMy18StartReq,
 	}
 }
 
@@ -41,6 +43,9 @@ type Connection struct {
 	key  *protocol.SecurityKey
 	Send chan *protocol.PhevMessage
 
+	done      chan struct{}
+	closeOnce sync.Once
+
 	listeners []*client.Listener
 	lMu       sync.Mutex
 
@@ -48,14 +53,44 @@ type Connection struct {
 
 	registerIndex  int
 	settingsSender *protocol.SettingsSender
+	stagedSettings map[byte]byte
+	startReqCmd    byte
+}
+
+// SendMsg enqueues a message for transmission unless the connection has closed.
+func (s *Connection) SendMsg(msg *protocol.PhevMessage) bool {
+	if msg == nil {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false
+	case s.Send <- msg:
+		return true
+	}
 }
 
 func (s *Connection) Close() error {
-	s.state = conClosed
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	return nil
+	var err error
+	s.closeOnce.Do(func() {
+		s.state = conClosed
+		close(s.done)
+
+		s.lMu.Lock()
+		for _, lis := range s.listeners {
+			lis.Stop()
+		}
+		s.listeners = nil
+		s.lMu.Unlock()
+
+		if s.car != nil {
+			s.car.removeConnection(s)
+		}
+		if s.conn != nil {
+			err = s.conn.Close()
+		}
+	})
+	return err
 }
 
 // Create and return a new Listener.
@@ -88,13 +123,13 @@ func (s *Connection) Start() {
 }
 
 func (s *Connection) reader() {
+	defer s.Close()
 	for {
-		s.conn.(*net.TCPConn).SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		data := make([]byte, 4096)
 		n, err := s.conn.Read(data)
 		if err != nil {
 			log.Debugf("%%PHEV_SVC_READER_ERROR%% %v", err)
-			s.conn.Close()
 			return
 		}
 		log.Tracef("%%PHEV_SVC_RECV_RAW%%: %s", hex.EncodeToString(data[:n]))
@@ -115,20 +150,22 @@ func (s *Connection) reader() {
 func (s *Connection) writer() {
 	for {
 		select {
+		case <-s.done:
+			return
 		case msg, ok := <-s.Send:
 			if !ok {
 				log.Debug("%PHEV_SVC_SEND_CLOSE%")
-				s.Close()
+				_ = s.Close()
 				return
 			}
 			if msg.Type != protocol.CmdInPingResp {
 				log.Debugf("%%PHEV_SVC_SND_MSG%%: %s", msg.ShortForm())
 			}
 			data := msg.EncodeToBytes(s.key)
-			s.conn.(*net.TCPConn).SetWriteDeadline(time.Now().Add(15 * time.Second))
+			_ = s.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if _, err := s.conn.Write(data); err != nil {
 				log.Debugf("%%PHEV_SVC_WRITE_ERR%%: %v", err)
-				s.Close()
+				_ = s.Close()
 				return
 			}
 		}

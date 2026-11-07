@@ -149,7 +149,7 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	emulatorCmd.PersistentFlags().String("address", ":8080", "Address to listen on")
-	emulatorCmd.Flags().String("mqtt_server", "tcp://127.0.0.1:1883", "Address of MQTT server")
+	emulatorCmd.Flags().String("mqtt_server", "", "Address of MQTT server (optional, e.g. tcp://127.0.0.1:1883)")
 	emulatorCmd.Flags().String("mqtt_username", "", "Username to login to MQTT server")
 	emulatorCmd.Flags().String("mqtt_password", "", "Password to login to MQTT server")
 	emulatorCmd.Flags().String("mqtt_topic_prefix", "phev/emu", "Prefix for MQTT topics")

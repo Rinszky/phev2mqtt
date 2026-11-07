@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"encoding/hex"
+	"io"
 	"os"
 	"strings"
 
@@ -43,12 +44,16 @@ Decode raw hex string messages from the provided filename.
 		}
 		defer f.Close()
 
-		inData := make([]byte, 100000)
-		n, err := f.Read(inData)
+		inData, err := io.ReadAll(f)
 		if err != nil {
 			panic(err)
 		}
-		dat := strings.Replace(string(inData[:n]), "\n", "", -1)
+		dat := strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\r' || r == ' ' || r == '\t' {
+				return -1
+			}
+			return r
+		}, string(inData))
 		binData, err := hex.DecodeString(dat)
 		if err != nil {
 			panic(err)

@@ -1,21 +1,37 @@
 {
-  "name": "PHEV",
-  "version": "1.4",
+  "name": "Mitsubishi Outlander PHEV (phev2mqtt)",
+  "version": "2.0.0",
   "slug": "phev",
-  "description": "Mitsubishi PHEV",
+  "description": "Mitsubishi Outlander PHEV WiFi-to-MQTT gateway with full climate/charge timers, ETACS settings, and Home Assistant Auto-Discovery",
   "arch": ["armhf", "armv7", "aarch64", "amd64", "i386"],
   "startup": "application",
   "boot": "auto",
+  "host_network": true,
+  "services": ["mqtt:want"],
   "options": {
-    "mqtt_server": null,
-    "mqtt_user": null,
-    "mqtt_password": null,
+    "car_address": "192.168.8.46:8080",
+    "mqtt_server": "",
+    "mqtt_user": "",
+    "mqtt_password": "",
+    "mqtt_topic_prefix": "phev",
+    "ha_discovery": true,
+    "ha_keep_sensors_available": false,
+    "auto_sync_time": false,
+    "update_interval": "5m",
+    "verbosity": "info",
     "debug": false
   },
   "schema": {
-    "mqtt_server": "str",
-    "mqtt_user": "str",
-    "mqtt_password": "str",
-    "debug": "bool"
+    "car_address": "str?",
+    "mqtt_server": "str?",
+    "mqtt_user": "str?",
+    "mqtt_password": "password?",
+    "mqtt_topic_prefix": "str?",
+    "ha_discovery": "bool?",
+    "ha_keep_sensors_available": "bool?",
+    "auto_sync_time": "bool?",
+    "update_interval": "str?",
+    "verbosity": "list(trace|debug|info|warn|error)?",
+    "debug": "bool?"
   }
 }

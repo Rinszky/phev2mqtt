@@ -89,12 +89,13 @@ func runSet(cmd *cobra.Command, args []string) {
 	if err := cl.Connect(); err != nil {
 		panic(err)
 	}
+	defer cl.Close()
 
 	if err := cl.Start(); err != nil {
 		panic(err)
 	}
 	log.Infof("Client connected and started!")
-	log.Infof("Waiting %d", waitTime.String())
+	log.Infof("Waiting %s", waitTime.String())
 
 	time.Sleep(waitTime)
 

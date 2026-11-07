@@ -117,3 +117,59 @@ func TestDecodeEncodeBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisterDecoders(t *testing.T) {
+	// 1. Charge plug 0001 = connected (waiting for timer)
+	plugMsg := &PhevMessage{Type: CmdInResp, Register: ChargePlugRegister, Data: []byte{0x00, 0x01}}
+	var plug RegisterChargePlug
+	plug.Decode(plugMsg)
+	if !plug.Connected || !plug.WaitingForTimer || plug.PlugState != "connected_waiting" {
+		t.Fatalf("unexpected ChargePlug 0001 decode: %+v", plug)
+	}
+
+	// 2. Battery level 0% and 3% valid, 0xff invalid
+	for _, lvl := range []byte{0, 3, 100} {
+		var bat RegisterBatteryLevel
+		bat.Decode(&PhevMessage{Type: CmdInResp, Register: BatteryLevelRegister, Data: []byte{lvl, 0x00, 0x01, 0x00}})
+		if !bat.Valid || bat.Level != int(lvl) || !bat.ParkingLights {
+			t.Fatalf("expected valid battery level %d, got %+v", lvl, bat)
+		}
+	}
+	var batInvalid RegisterBatteryLevel
+	batInvalid.Decode(&PhevMessage{Type: CmdInResp, Register: BatteryLevelRegister, Data: []byte{0xff, 0x00, 0x00, 0x00}})
+	if batInvalid.Valid {
+		t.Fatalf("expected 0xff battery level to be marked invalid")
+	}
+
+	// 3. Pre-AC stop time 02b020 -> PreACOn, 16:32
+	var preAC RegisterPreACState
+	preAC.Decode(&PhevMessage{Type: CmdInResp, Register: PreACStateRegister, Data: []byte{0x02, 0xb0, 0x20}})
+	if preAC.State != PreACOn || !preAC.HasTargetTime || preAC.TargetTimeString() != "16:32" {
+		t.Fatalf("unexpected PreACState 02b020 decode: %+v (%s)", preAC, preAC.TargetTimeString())
+	}
+
+	// 4. Ignition & AC delay 0000000101 -> ignition off, delay 5m pending
+	var oper RegisterACOperStatus
+	oper.Decode(&PhevMessage{Type: CmdInResp, Register: ACOperStatusRegister, Data: []byte{0x00, 0x00, 0x00, 0x01, 0x01}})
+	if oper.Ignition != "off" || oper.Delay != 5 || !oper.DelayPending {
+		t.Fatalf("unexpected ACOperStatus decode: %+v", oper)
+	}
+
+	// 5. VIN 16-char compatibility + 17-char FullVIN
+	vinBytes := make([]byte, 20)
+	vinBytes[0] = 0x01
+	copy(vinBytes[1:18], []byte("JMFXDGG2WJZ000480"))
+	vinBytes[19] = 0x02
+	var vinReg RegisterVIN
+	vinReg.Decode(&PhevMessage{Type: CmdInResp, Register: VINRegister, Data: vinBytes})
+	if vinReg.VIN != "JMFXDGG2WJZ00048" || vinReg.FullVIN != "JMFXDGG2WJZ000480" || vinReg.Registrations != 2 {
+		t.Fatalf("unexpected VIN decode: %+v", vinReg)
+	}
+
+	// 6. LightStatus & Theft Alarm triggered
+	var ls RegisterLightStatus
+	ls.Decode(&PhevMessage{Type: CmdInResp, Register: LightStatusRegister, Data: []byte{0x01, 0x04, 0x00, 0x01, 0x02}})
+	if !ls.ClimateTimerArmed || ls.TheftAlarm != "triggered" || !ls.TheftAlarmTriggered || !ls.Hazard || ls.Interior {
+		t.Fatalf("unexpected LightStatus decode: %+v", ls)
+	}
+}

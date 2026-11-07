@@ -3,18 +3,21 @@ package emulator
 import (
 	"encoding/hex"
 	"fmt"
+	"math/rand"
+	"net"
+	"sync"
+	"time"
+
 	"github.com/buxtronix/phev2mqtt/protocol"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"math/rand"
-	"net"
-	"time"
 )
 
 const listenAddress = ":8080"
 
 // A Car represents a virtual emulated car.
 type Car struct {
+	mu sync.RWMutex
 	// Registers are the current registers and settings for Car.
 	Registers []protocol.Register
 	// Settings are the vehicle settings.
@@ -25,43 +28,108 @@ type Car struct {
 
 // Begin starts the emulator.
 func (c *Car) Begin() error {
-	l, err := net.Listen("tcp4", c.address)
+	addr := c.address
+	if addr == "" {
+		addr = listenAddress
+	}
+	l, err := net.Listen("tcp4", addr)
 	if err != nil {
 		return err
 	}
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UnixNano())
 
 	go func() {
 		defer l.Close()
 		for {
 			conn, err := l.Accept()
 			if err != nil {
-				log.Errorf("Accept() error: %v")
+				log.Errorf("Accept() error: %v", err)
 				return
 			}
 			svc := NewConnection(conn, c)
+			c.mu.Lock()
 			c.connections = append(c.connections, svc)
+			c.mu.Unlock()
 
 			go svc.Start()
 		}
 	}()
-	log.Debugf("%%PHEV_EMULATOR_START%% Started PHEV emulator, address=%s", c.address)
+	log.Debugf("%%PHEV_EMULATOR_START%% Started PHEV emulator, address=%s", addr)
 	return nil
 }
 
-// SetRegister sends a register to client.
-func (c *Car) SetRegister(register byte, value []byte) error {
-	g := new(errgroup.Group)
+func (c *Car) removeConnection(target *Connection) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.connections[:0]
 	for _, conn := range c.connections {
+		if conn != target {
+			out = append(out, conn)
+		}
+	}
+	c.connections = out
+}
+
+// UpdateCachedRegister updates or appends a register value in the emulated car's state.
+func (c *Car) UpdateCachedRegister(reg byte, value []byte) {
+	cp := append([]byte(nil), value...)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.Registers {
+		if c.Registers[i].Register() == reg {
+			c.Registers[i] = &protocol.RegisterGeneric{Reg: reg, Value: cp}
+			return
+		}
+	}
+	c.Registers = append(c.Registers, &protocol.RegisterGeneric{Reg: reg, Value: cp})
+}
+
+// GetCachedRegisterBytes returns a copy of the cached register bytes, if present.
+func (c *Car) GetCachedRegisterBytes(reg byte) []byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, r := range c.Registers {
+		if r.Register() == reg {
+			msg := r.Encode()
+			if msg != nil {
+				return append([]byte(nil), msg.Data...)
+			}
+		}
+	}
+	return nil
+}
+
+// SnapshotRegisters returns a thread-safe slice copy of the car's registers.
+func (c *Car) SnapshotRegisters() []protocol.Register {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]protocol.Register, len(c.Registers))
+	copy(out, c.Registers)
+	return out
+}
+
+// SetRegister sends a register to all active clients.
+func (c *Car) SetRegister(register byte, value []byte) error {
+	c.UpdateCachedRegister(register, value)
+	c.mu.RLock()
+	conns := append([]*Connection(nil), c.connections...)
+	c.mu.RUnlock()
+
+	g := new(errgroup.Group)
+	for _, conn := range conns {
+		conn := conn
 		g.Go(func() error {
-			timer := time.After(10 * time.Second)
+			timer := time.NewTimer(10 * time.Second)
+			defer timer.Stop()
 			l := conn.AddListener()
 			defer conn.RemoveListener(l)
 		SETREG:
-			conn.Send <- protocol.NewMessage(protocol.CmdInResp, register, false, value)
+			if !conn.SendMsg(protocol.NewMessage(protocol.CmdInResp, register, false, value)) {
+				return fmt.Errorf("connection closed")
+			}
 			for {
 				select {
-				case <-timer:
+				case <-timer.C:
 					return fmt.Errorf("timed out attempting to set register %02x", register)
 				case msg, ok := <-l.C:
 					if !ok {
@@ -92,9 +160,13 @@ func AddressOption(address string) func(*Car) {
 
 // NewCar returns a new Car. You get a Car! Everyone gets a Car!
 func NewCar(opts ...Option) (*Car, error) {
+	regsCopy := make([]protocol.Register, len(defaultRegisters))
+	copy(regsCopy, defaultRegisters)
+
 	c := &Car{
-		Registers: defaultRegisters,
+		Registers: regsCopy,
 		Settings:  &protocol.Settings{},
+		address:   listenAddress,
 	}
 	for _, o := range opts {
 		o(c)
@@ -121,50 +193,42 @@ func mustRegister(register byte, value string) protocol.Register {
 }
 
 var defaultRegisters = []protocol.Register{
-	mustRegister(0x06, "002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0100"),
-	mustRegister(0x7, "00"),
+	mustRegister(0x01, "0100"),
+	&protocol.RegisterBatteryWarning{Warning: 0},
+	mustRegister(0x03, "011563"),
+	mustRegister(0x04, "7d38b00183bd00017c70380200ffff0300ffff03"),
+	mustRegister(0x05, "0100fe0700fe0700fe0700fe0700fe07"),
+	&protocol.RegisterVIN{FullVIN: "JMFXDGG2WJZ000480", Registrations: 2},
+	mustRegister(0x07, "06"),
 	mustRegister(0x0b, "00"),
 	mustRegister(0x0c, "01"),
 	mustRegister(0x0d, "04"),
 	mustRegister(0x0f, "00"),
 	mustRegister(0x10, "000000"),
 	mustRegister(0x11, "00"),
-	mustRegister(0x12, "160a0712391805"),
+	mustRegister(0x12, "1a0b070e000006"),
 	mustRegister(0x13, "00"),
 	mustRegister(0x14, "00000000000000"),
-	//	&protocol.RegisterVIN{VIN: "JMFXDGG2WJZ00048", Registrations: 2},
-	mustRegister(0x15, "032E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E0100"),
-	mustRegister(0x17, "01"),
-	mustRegister(0x1a, "0300000000"),
-	mustRegister(0x1b, "11"),
-	mustRegister(0x1c, "03"),
-	mustRegister(0x1d, "06000000"),
+	mustRegister(0x17, "02"),
+	mustRegister(0x18, "00000000"),
+	mustRegister(0x1a, "0000000000"),
+	mustRegister(0x1b, "12"),
+	mustRegister(0x1c, "02"),
+	mustRegister(0x1d, "50000000"),
 	mustRegister(0x1e, "0000"),
 	mustRegister(0x1f, "00ffff"),
 	mustRegister(0x21, "00"),
 	mustRegister(0x22, "000000000000"),
-	mustRegister(0x23, "0000000202"),
-	mustRegister(0x24, "02000000000000000000"),
+	mustRegister(0x23, "0001000202"),
+	mustRegister(0x24, "01000000000000000000"),
 	mustRegister(0x25, "0e00ff"),
 	mustRegister(0x26, "00"),
 	mustRegister(0x27, "00"),
-	mustRegister(0x28, "00"),
-	mustRegister(0x29, "000200"),
-	mustRegister(0x2C, "00"),
-	mustRegister(0xC0, "30303532303232303030110000"),
-	mustRegister(0x01, "0100"),
-	mustRegister(0x02, "0100"),
-	mustRegister(0x3, "011563"),
-	mustRegister(0x04, "7d38b00183bd00017c70380100ffff0300ffff03"),
-	mustRegister(0x5, "0100fe0700fe0700fe0700fe0700fe07"),
-	mustRegister(0x06, "002D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D0100"),
-	//	&protocol.RegisterVIN{VIN: "JMFXDGG2WJZ00048", Registrations: 2},
-	mustRegister(0x15, "032E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E0100"),
-	mustRegister(0x2A, "00"),
-	mustRegister(0x2C, "00"),
-	mustRegister(0x3, "011563"),
-	&protocol.RegisterBatteryWarning{Warning: 0},
 	&protocol.RegisterWIFISSID{SSID: "REMOTEc0ffee"},
+	mustRegister(0x29, "000200"),
+	mustRegister(0x2a, "00"),
+	mustRegister(0x2c, "00"),
+	mustRegister(0xc0, "30303532303232303030110000"),
 }
 
 var defaultSettings = []string{
@@ -176,7 +240,6 @@ var defaultSettings = []string{
 	"0231007206730600",
 	"02b4003506360e00",
 	"02370e3806390000",
-	"023a003b003c0000",
 	"024106420603fe00",
 	"02c41e850e861e00",
 	"02473ec81e093f00",

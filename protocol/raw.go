@@ -1,9 +1,9 @@
 package protocol
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	log "github.com/sirupsen/logrus"
-	"math/rand"
 )
 
 type SecurityState int
@@ -24,11 +24,30 @@ type SecurityKey struct {
 	sNum, rNum  byte
 }
 
+// Snapshot returns a deep copy of the SecurityKey so callers can safely test
+// packet decoding without mutating active session key state on false matches.
+func (s *SecurityKey) Snapshot() *SecurityKey {
+	if s == nil {
+		return nil
+	}
+	cp := &SecurityKey{
+		State:       s.State,
+		securityKey: s.securityKey,
+		sNum:        s.sNum,
+		rNum:        s.rNum,
+	}
+	if len(s.proposedKey) > 0 {
+		cp.proposedKey = append([]byte(nil), s.proposedKey...)
+	}
+	if len(s.keyMap) > 0 {
+		cp.keyMap = append([]byte(nil), s.keyMap...)
+	}
+	return cp
+}
+
 func (s *SecurityKey) GenerateProposal() []byte {
 	s.proposedKey = make([]byte, 8)
-	for i := 0; i < 8; i++ {
-		s.proposedKey[i] = byte(rand.Intn(256))
-	}
+	_, _ = rand.Read(s.proposedKey)
 	s.State = SecurityKeyProposed
 	return s.proposedKey
 }
@@ -131,21 +150,27 @@ func XorMessageWith(message []byte, xor byte) []byte {
 }
 
 func Checksum(message []byte) byte {
-	length := message[1] + 2
+	if len(message) < 2 {
+		return 0
+	}
+	dataLen := int(message[1]) + 1
+	if dataLen > len(message) {
+		dataLen = len(message)
+	}
 
-	b := byte(0)
-	for i := byte(0); ; i++ {
-		if i >= length-1 {
-			break
-		}
-		b = (byte)(message[i] + b)
+	var b byte
+	for i := 0; i < dataLen; i++ {
+		b += message[i]
 	}
 	return b
 }
 
 func ValidateChecksum(message []byte) bool {
+	if len(message) < 2 {
+		return false
+	}
 	length := int(message[1]) + 2
-	if len(message) < length {
+	if length < 4 || len(message) < length {
 		return false
 	}
 	wantSum := message[length-1]

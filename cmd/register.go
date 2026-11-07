@@ -68,46 +68,50 @@ func runRegister(cmd *cobra.Command, args []string) {
 	if err := cl.Connect(); err != nil {
 		panic(err)
 	}
+	defer cl.Close()
 
 	if err := cl.Start(); err != nil {
 		panic(err)
 	}
 	log.Infof("Client connected and started!")
 
-	vinCh := make(chan string)
+	vinCh := make(chan string, 1)
 
 	go func() {
-		for {
-			select {
-			case msg, ok := <-cl.Recv:
-				if !ok {
-					log.Errorf("Connection closed.")
-					close(vinCh)
-					return
+		defer close(vinCh)
+		for msg := range cl.Recv {
+			switch msg.Type {
+			case protocol.CmdInResp:
+				if msg.Ack != protocol.Request {
+					break
 				}
-				switch msg.Type {
-				case protocol.CmdInResp:
-					if msg.Ack != protocol.Request {
-						break
-					}
-					if reg, ok := msg.Reg.(*protocol.RegisterVIN); ok {
-						vinCh <- reg.VIN
-					}
-					cl.Send <- &protocol.PhevMessage{
-						Type:     protocol.CmdOutSend,
-						Register: msg.Register,
-						Ack:      protocol.Ack,
-						Xor:      msg.Xor,
-						Data:     []byte{0x0},
+				if reg, ok := msg.Reg.(*protocol.RegisterVIN); ok {
+					select {
+					case vinCh <- reg.VIN:
+					default:
 					}
 				}
+				_ = cl.SendMessage(&protocol.PhevMessage{
+					Type:     protocol.CmdOutSend,
+					Register: msg.Register,
+					Ack:      protocol.Ack,
+					Xor:      msg.Xor,
+					Data:     []byte{0x0},
+				})
 			}
 		}
 	}()
 
-	vin, ok := <-vinCh
-	if !ok {
-		log.Errorf("Client closed before recieving VIN")
+	var vin string
+	select {
+	case v, ok := <-vinCh:
+		if !ok {
+			log.Errorf("Client closed before receiving VIN")
+			return
+		}
+		vin = v
+	case <-time.After(30 * time.Second):
+		log.Errorf("Timed out waiting for VIN from car")
 		return
 	}
 

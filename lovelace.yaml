@@ -1,116 +1,262 @@
+# Mitsubishi Outlander PHEV - Complete Home Assistant Lovelace View
+# Uses standard built-in Home Assistant cards (no custom HACS cards required).
+# Adjust entity prefixes if your device name differs from default ("phev").
+
+title: Outlander PHEV
+path: phev
+icon: mdi:car-electric
+cards:
+  # 1. Overview & Battery Gauge
+  - type: vertical-stack
+    cards:
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.phev_battery
+            name: Drive Battery
+            unit: "%"
+            min: 0
+            max: 100
+            severity:
+              green: 50
+              yellow: 20
+              red: 0
+          - type: entities
+            title: Charging & Connection
+            show_header_toggle: false
+            entities:
+              - entity: binary_sensor.phev_vehicle_wifi_connected
+                name: WiFi Connected
+              - entity: binary_sensor.phev_charger_connected
+                name: Plugged In
+              - entity: sensor.phev_charge_plug_state
+                name: Plug Status
+              - entity: binary_sensor.phev_charging
+                name: Charging Active
+              - entity: sensor.phev_charge_type
+                name: Charge Type
+              - entity: sensor.phev_charge_remaining
+                name: Time Remaining
+              - entity: binary_sensor.phev_waiting_for_charge_timer
+                name: Waiting for Timer
+              - entity: button.phev_charge_now_override_timer
+                name: Charge Immediately
+
+  # 2. Immediate Climate / Pre-Conditioning
+  - type: vertical-stack
     cards:
       - type: horizontal-stack
         cards:
           - type: button
-            tap_action:
-              action: toggle
-            entity: switch.phev_cool
-          - type: button
-            tap_action:
-              action: toggle
             entity: switch.phev_heat
+            name: Heat
+            tap_action:
+              action: toggle
           - type: button
+            entity: switch.phev_cool
+            name: Cool
             tap_action:
               action: toggle
+          - type: button
             entity: switch.phev_windscreen
-      - type: horizontal-stack
-        cards:
-          - type: picture-elements
-            elements:
-              - type: state-icon
-                entity: light.phev_park_lights
-                style:
-                  top: 95%
-                  left: 30%
-              - type: state-icon
-                entity: light.phev_head_lights
-                style:
-                  top: 5%
-                  left: 50%
-              - type: state-icon
-                entity: binary_sensor.phev_boot
-                style:
-                  top: 90%
-                  left: 50%
-              - type: state-icon
-                entity: binary_sensor.phev_bonnet
-                style:
-                  top: 17%
-                  left: 50%
-              - type: state-icon
-                entity: binary_sensor.phev_front_left_door
-                icon: mdi:car-door
-                style:
-                  top: 50%
-                  left: 7%
-              - type: state-icon
-                entity: binary_sensor.phev_front_right_door
-                icon: mdi:car-door
-                style:
-                  top: 50%
-                  left: 90%
-              - type: state-icon
-                entity: binary_sensor.phev_rear_left_door
-                icon: mdi:car-door
-                style:
-                  top: 65%
-                  left: 7%
-              - type: state-icon
-                entity: binary_sensor.phev_rear_right_door
-                icon: mdi:car-door
-                style:
-                  top: 65%
-                  left: 90%
-              - type: state-icon
-                entity: binary_sensor.phev_charger_connected
-                style:
-                  top: 80%
-                  left: 90%
-              - type: state-icon
-                entity: binary_sensor.phev_locked
-                style:
-                  top: 60%
-                  left: 50%
-            image: https://ha.cactii.net/local/car-top-1.png
-          - type: gauge
+            name: Defrost
             tap_action:
               action: toggle
-            entity: sensor.phev_battery
-            unit: '%'
-          - type: custom:button-card
-            entity: binary_sensor.phev_charger_connected
-            name: Charger
-            aspect_ratio: 1/1.7
-            tap_action:
-              action: more-info
-              entity: switch.phev_disable_charge_timer
-            styles:
-              grid:
-                - position: relative
-              custom_fields:
-                notification:
-                  - background-color: |
-                      [[[
-                        if (states['binary_sensor.phev_charging'].state == "on")
-                          return "green";
-                        return "red";
-                      ]]]
-                  - border-radius: 50%
-                  - position: absolute
-                  - left: 60%
-                  - top: 10%
-                  - height: 40px
-                  - width: 40px
-                  - font-size: 14px
-                  - line-height: 40px
-            custom_fields:
-              notification: >
-                [[[ return
-                Math.floor(states['sensor.phev_charge_remaining'].state) +'m']]]
-            state:
-              - value: 'on'
-                icon: mdi:power-plug
-                label: Plugged In
-              - value: 'off'
-                icon: mdi:power-plug-off
-                label: Unplugged
+      - type: entities
+        title: Immediate Pre-Conditioning (Pre-AC)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.phev_climate_status
+            name: Current Status
+          - entity: sensor.phev_climate_stop_time
+            name: Scheduled Stop Time
+          - entity: select.phev_climate_state
+            name: Mode
+          - entity: select.phev_climate_duration_min
+            name: Duration (10 / 20 / 30 min)
+          - entity: select.phev_climate_start_delay_min
+            name: Start Delay (0 / 5 / 10 min)
+          - entity: button.phev_reset_climate_error
+            name: Clear Termination Alert
+
+  # 3. Climate / Heating Schedule (Timers 1..5)
+  - type: entities
+    title: Climate / Heating Schedule (Timers 1-5)
+    show_header_toggle: false
+    entities:
+      - entity: switch.phev_climate_timer_master
+        name: Master Schedule Enabled
+      - entity: select.phev_climate_timer_mode
+        name: Scheduled Mode (Heat / Cool / Windscreen)
+      - type: section
+        label: Timer 1
+      - entity: switch.phev_climate_timer_1_enabled
+        name: Timer 1 Active
+      - entity: text.phev_climate_timer_1_time
+        name: Start Time (HH:MM)
+      - entity: select.phev_climate_timer_1_duration
+        name: Duration (min)
+      - entity: text.phev_climate_timer_1_days
+        name: Days (e.g. Weekdays, Everyday, Mon,Wed,Fri)
+      - type: section
+        label: Timer 2
+      - entity: switch.phev_climate_timer_2_enabled
+        name: Timer 2 Active
+      - entity: text.phev_climate_timer_2_time
+        name: Start Time (HH:MM)
+      - entity: select.phev_climate_timer_2_duration
+        name: Duration (min)
+      - entity: text.phev_climate_timer_2_days
+        name: Days
+      - type: section
+        label: Timer 3
+      - entity: switch.phev_climate_timer_3_enabled
+        name: Timer 3 Active
+      - entity: text.phev_climate_timer_3_time
+        name: Start Time (HH:MM)
+      - entity: select.phev_climate_timer_3_duration
+        name: Duration (min)
+      - entity: text.phev_climate_timer_3_days
+        name: Days
+      - type: section
+        label: Timer 4
+      - entity: switch.phev_climate_timer_4_enabled
+        name: Timer 4 Active
+      - entity: text.phev_climate_timer_4_time
+        name: Start Time (HH:MM)
+      - entity: select.phev_climate_timer_4_duration
+        name: Duration (min)
+      - entity: text.phev_climate_timer_4_days
+        name: Days
+      - type: section
+        label: Timer 5
+      - entity: switch.phev_climate_timer_5_enabled
+        name: Timer 5 Active
+      - entity: text.phev_climate_timer_5_time
+        name: Start Time (HH:MM)
+      - entity: select.phev_climate_timer_5_duration
+        name: Duration (min)
+      - entity: text.phev_climate_timer_5_days
+        name: Days
+
+  # 4. Charging Schedule (Timers 1..5)
+  - type: entities
+    title: Charging Schedule (Timers 1-5)
+    show_header_toggle: false
+    entities:
+      - entity: switch.phev_charge_timer_master
+        name: Charge Timer Master Enabled
+      - entity: switch.phev_disable_charge_timer
+        name: Override / Disable Charge Timer
+      - type: section
+        label: Charge Timer 1
+      - entity: switch.phev_charge_timer_1_enabled
+        name: Timer 1 Active
+      - entity: text.phev_charge_timer_1_start
+        name: Start (HH:MM)
+      - entity: text.phev_charge_timer_1_end
+        name: End (HH:MM)
+      - entity: switch.phev_charge_timer_1_full_charge
+        name: Full Charge
+      - entity: text.phev_charge_timer_1_days
+        name: Days
+      - type: section
+        label: Charge Timer 2
+      - entity: switch.phev_charge_timer_2_enabled
+        name: Timer 2 Active
+      - entity: text.phev_charge_timer_2_start
+        name: Start (HH:MM)
+      - entity: text.phev_charge_timer_2_end
+        name: End (HH:MM)
+      - entity: switch.phev_charge_timer_2_full_charge
+        name: Full Charge
+      - entity: text.phev_charge_timer_2_days
+        name: Days
+      - type: section
+        label: Charge Timer 3
+      - entity: switch.phev_charge_timer_3_enabled
+        name: Timer 3 Active
+      - entity: text.phev_charge_timer_3_start
+        name: Start (HH:MM)
+      - entity: text.phev_charge_timer_3_end
+        name: End (HH:MM)
+      - entity: switch.phev_charge_timer_3_full_charge
+        name: Full Charge
+      - entity: text.phev_charge_timer_3_days
+        name: Days
+      - type: section
+        label: Charge Timer 4
+      - entity: switch.phev_charge_timer_4_enabled
+        name: Timer 4 Active
+      - entity: text.phev_charge_timer_4_start
+        name: Start (HH:MM)
+      - entity: text.phev_charge_timer_4_end
+        name: End (HH:MM)
+      - entity: switch.phev_charge_timer_4_full_charge
+        name: Full Charge
+      - entity: text.phev_charge_timer_4_days
+        name: Days
+      - type: section
+        label: Charge Timer 5
+      - entity: switch.phev_charge_timer_5_enabled
+        name: Timer 5 Active
+      - entity: text.phev_charge_timer_5_start
+        name: Start (HH:MM)
+      - entity: text.phev_charge_timer_5_end
+        name: End (HH:MM)
+      - entity: switch.phev_charge_timer_5_full_charge
+        name: Full Charge
+      - entity: text.phev_charge_timer_5_days
+        name: Days
+
+  # 5. Security, Doors, Ignition & Lights
+  - type: entities
+    title: Security, Doors, Ignition & Lights
+    show_header_toggle: false
+    entities:
+      - entity: binary_sensor.phev_locked
+        name: Central Lock
+      - entity: sensor.phev_ignition_state
+        name: Ignition State
+      - entity: sensor.phev_theft_alarm_state
+        name: Theft Alarm State
+      - entity: binary_sensor.phev_theft_alarm_triggered
+        name: Alarm Triggered
+      - entity: sensor.phev_last_theft_alarm_event
+        name: Last Alarm Event
+      - entity: button.phev_clear_alarm_notification
+        name: Clear Alarm Event
+      - type: divider
+      - entity: binary_sensor.phev_driver_door
+      - entity: binary_sensor.phev_front_passenger_door
+      - entity: binary_sensor.phev_rear_left_door
+      - entity: binary_sensor.phev_rear_right_door
+      - entity: binary_sensor.phev_boot
+      - entity: binary_sensor.phev_bonnet
+      - type: divider
+      - entity: light.phev_park_lights
+      - entity: light.phev_head_lights
+      - entity: binary_sensor.phev_interior_lights
+      - entity: binary_sensor.phev_hazard_lights
+      - entity: button.phev_locate_car_flash_lights
+
+  # 6. Vehicle System, Clock, Wi-Fi & Diagnostics
+  - type: entities
+    title: Vehicle Diagnostics, Clock & Wi-Fi
+    show_header_toggle: false
+    entities:
+      - entity: button.phev_refresh_vehicle_status
+      - entity: sensor.phev_car_clock
+      - entity: button.phev_sync_car_clock
+      - entity: binary_sensor.phev_battery_warning
+      - entity: sensor.phev_battery_thermal_status
+      - entity: binary_sensor.phev_battery_warming
+      - entity: sensor.phev_wifi_ssid
+      - entity: select.phev_wifi_channel
+      - entity: switch.phev_keep_wifi_always_active
+      - entity: sensor.phev_vin
+      - entity: sensor.phev_ecu_version
+      - entity: sensor.phev_steering_side
+      - entity: sensor.phev_registered_smartphones
+      - entity: sensor.phev_last_seen
+      - entity: button.phev_restart_wifi_connection

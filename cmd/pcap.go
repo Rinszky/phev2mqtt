@@ -129,7 +129,7 @@ func decodePacket(cmd *cobra.Command, packet gopacket.Packet) {
 	}
 
 	if err := packet.ErrorLayer(); err != nil {
-		log.Errorf("error decoding packet:", err)
+		log.Errorf("error decoding packet: %v", err)
 	}
 }
 
@@ -139,10 +139,10 @@ func processPayload(cmd *cobra.Command, data []byte, dir string) {
 	for _, msg := range msgs {
 		if r, _ := cmd.Flags().GetBool("registers"); r {
 			handleRegisters(msg)
-			return
+			continue
 		}
 		if !pings && (msg.Type == protocol.CmdOutPingReq || msg.Type == protocol.CmdInPingResp) {
-			return
+			continue
 		}
 		log.Infof("%s [%02x] %s", dir, msg.Xor, msg.ShortForm())
 	}

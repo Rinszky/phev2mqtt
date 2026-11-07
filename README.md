@@ -1,268 +1,207 @@
-# phev2mqtt - Mitsubishi Outlander PHEV to MQTT gateway
+# phev2mqtt — Mitsubishi Outlander PHEV to MQTT & Home Assistant Gateway
 
-Utility to interact with a Mitsubishi Outlander PHEV via the Wifi remote
-control protocol.
+Full-featured Go utility and MQTT / Home Assistant bridge for the Mitsubishi Outlander PHEV (MY14–MY24) Wi-Fi Remote Control protocol (`192.168.8.46:8080`).
 
-Inspired by https://github.com/phev-remote/ but written entirely in Go.
+Inspired by [phev-remote](https://github.com/phev-remote/) and expanded with complete register decoding, **5-slot Climate (Heating/Cooling/Defrost) Timer scheduling**, **5-slot Charge Timer scheduling**, **dynamic ETACS/AC vehicle customization settings**, theft alarm & ignition telemetry, RTC clock sync, and automatic Home Assistant MQTT Discovery.
 
-For further hacking, read the [protocol documentation](protocol/README.md).
-
-Tested against a MY18 vehicle.
+- Protocol & register reference: [protocol/README.md](protocol/README.md)
+- ETACS / AC customization settings catalog (`0x01`–`0x3c`): [protocol/SETTINGS.md](protocol/SETTINGS.md)
+- Sample Home Assistant dashboard: [lovelace.yaml](lovelace.yaml)
 
 ![Home Assistant Screenshot](phev-ha.png)
 
-## Supported functionality
+---
 
- * MQTT proxy to Phev
- * Home Assistant discovery
- * Register client to car
- * Fetch battery, charge, door, light status
- * Set lights and charge enable
- * Near-instant response to commands
- * *Only tested on a MY18 Phev*
+## Supported Features
 
-Also includes some debugging utilities, and a vehicle emulator.
+- **MQTT Gateway & Home Assistant Auto-Discovery** (automatic re-announcement on broker or HA restart via `homeassistant/status` birth messages)
+- **Immediate Pre-Conditioning (Pre-AC):**
+  - Heat, Cool, and Windscreen Defrost modes
+  - Selectable Duration (`10`, `20`, `30` minutes) and Start Delay (`0`, `5`, `10` minutes)
+  - Live target stop time (`HH:MM`) and early-termination error reset (`0x13`)
+  - Full MY14 (`0x02`/`0x04`) and MY18–MY24 (`0x1b`) support
+- **5-Slot Climate / Heating Schedule (`0x05` / `0x1a` / `0x03`):**
+  - Master schedule switch + scheduled mode (`heat`, `cool`, `windscreen`)
+  - Per-slot Enable, Start Time (`HH:MM`), Duration (`10`/`20`/`30` min), and Days of Week (English & Hungarian presets/names) or JSON payload
+- **5-Slot Battery Charging Schedule (`0x04` / `0x19` / `0x17`):**
+  - Master charge timer switch + immediate *Charge Now (Override Timer)* button
+  - Per-slot Enable, Start Time, End Time, Full Charge toggle, and Days of Week
+  - Detailed plug sub-states (`unplugged`, `connected_waiting`, `connected`, `charging`) and charge type (`off`, `normal`, `quick`)
+- **Dynamic ETACS & AC Vehicle Customization (`0x16` / `0x0f` / `0x0e`):**
+  - Automatically discovers every customization option supported by your vehicle trim (auto-fold mirrors, auto-relock timer, horn/turn-signal answerback, wiper intervals, headlight cut-out, AC eco/recirculation, etc.) as Home Assistant `select` (`config`) entities!
+- **Security, Ignition, Battery Health, Clock & Wi-Fi:**
+  - Ignition state (`off`, `acc`, `on`, `ready`)
+  - Theft alarm state (`disarmed`, `armed`, `triggered`), last alarm trigger event & timestamp (`0x14`), and clear alarm button (`0x08`)
+  - Drive battery SOC (`0–100%`), cold/thermal warnings, and battery warming indicator (`0x02`)
+  - Parking & headlight switches + *Locate Car (Flash Lights)* button
+  - Vehicle real-time clock sensor (`0x12`), *Sync Car Clock* button (`0x05`), and optional `--auto_sync_time`
+  - Wi-Fi SSID (`0x28`), Wi-Fi Channel selector (`1–11`), Keep Wi-Fi Always Active switch (`0x27` / `0x11`), LHD/RHD automatic door side mapping (`0x29`), and V2H external power status (`0x18`)
+- **CLI Tools & Interactive Vehicle Emulator:**
+  - `phev2mqtt client register`, `watch`, `set`, `synctime`, `timers`, `settings`, `mqtt`
+  - `phev2mqtt emulator` (full interactive MY14/MY18/MY24 virtual car)
+  - `phev2mqtt decode file` / `phev2mqtt decode pcap` (with `-tags pcap`)
 
-## Requirements
+---
 
- * Go compiler
+## Building & Running
 
-## Licence, etc
+### Build from Source
 
-Licenced under the GPLv2.
-
-Copyright 2021 Ben Buxton <bbuxton@gmail.com>
-
-Contributions and PRs are welcome.
-
-## Getting started.
-
-### Compiling
-
-#### Install Go
-
- * Download and install the latest [Go compiler](https://golang.org/dl/)
-   * Your distro packager may have a version thats too old
-   * For raspbian choose the ARMv6 release
-
-#### Install PCAP dev libraries
-
- * Optionally, you may want to have libpcap-dev package installed (if building with `-tags pcap`.)
-
-#### Download, extract, and compile phev2mqtt
-
- * Download the phev2mqtt archive
- * Extract it
- * Go into its the top level directory and run `go build`
- * Verify it runs with `./phev2mqtt -h`
-
-### Connecting to the vehicle.
-
-#### Configure Wifi client on system running mqtt2phev
-
-On your computer running the phev2mqtt tools, configure a new Wifi connection to the
-car's SSID,
-
-#### Register the client to the car
-
-Follow the [Mitsubishi instructions](https://www.mitsubishi-motors.com/en/products/outlander_phev/app/remote/)
-to find the Wifi credentials provided with the car.
-
-Verify that your Wifi connection to the car is established - your local IP address
-should be 192.168.8.47.
-
-Follow the [Mitsubishi instructions](https://www.mitsubishi-motors.com/en/products/outlander_phev/app/remote/)
-and put the car into registration mode ("Setup Your Vehicle"). You may need to
-re-establish the Wifi connection.
-
-Register by running `phev2mqtt client register` and you should shortly see a message
-indicating successful registration.
-
-#### Testing the tool
-
-Once connected to the car, you can sniff for messages by running *phev2mqtt client watch*.
-The phone client needs to be disconnected for this to work.
-You'll see a bunch of data go by - some of those will be decoded into readable
-messages such as charge and AC status.
-
-### MQTT Gateway
-
-The primary feature of this code is to run as a proxy between the car and
-MQTT. Registers with car status are sent to MQTT, both as raw register
-values and decoded functional values. Commands sent on MQTT topics can
-be used to control certain aspects of the vehicle.
-
-Start the MQTT gateway with:
-
-`./phev2mqtt client mqtt --mqtt_server tcp://<your_mqtt_address:1883/ [--mqtt_username <mqtt_username>] [--mqtt_password <mqtt_password>]`
-
-The following topics are published:
-
-| Topic/prefix | Description |
-|---|---|
-| phev/register/[register] | Raw values of each register, as hex strings |
-| phev/available | Wifi connection status to car. *online* or *offline* |
-| phev/battery/level | Current drive battery level as a percent |
-| phev/climate/status | Whether the car AC is on |
-| phev/climate/mode | Mode of the AC, if on. *cool*, *heat*, *windscreen* |
-| phev/climate/[mode] | Alternative of above. Modes are *cool*, *heat*, *windscreen* which can be *off* or *on* |
-| phev/charge/charging | Whether the battery is charging. *on* or *off* |
-| phev/charge/plug | If the charging plug is *unplugged* or *connected*. |
-| phev/charge/remaining | Minutes left, if charging. |
-| phev/door/locked | Whether the car is locked. *on* or *off* |
-| ~~phev/door/front_left~~ | State of doors. *closed* or *open* |
-| ~~phev/door/front_right~~ | State of doors. *closed* or *open* |
-| phev/door/front_passenger | State of doors. *closed* or *open* |
-| phev/door/driver | State of doors. *closed* or *open* |
-| phev/door/rear_left | State of doors. *closed* or *open* |
-| phev/door/rear_right | State of doors. *closed* or *open* |
-| phev/door/bonnet | State of doors. *closed* or *open* |
-| phev/door/boot | State of doors. *closed* or *open* |
-| phev/lights/parking | Parking lights. *on* or *off* |
-| phev/lights/head | Head lights. *on* or *off* |
-| phev/lights/hazard | Hazard lights. *on* or *off* |
-| phev/lights/interior | Interior lights. *on* or *off* |
-| phev/vin | Discovered VIN of the car |
-| phev/registrations | Number of wifi clients registered to the car |
-
-The following topics are subscribed to and can be used to change state on the car:
-
-| Topic/prefix | Description |
-|---|---|
-| phev/set/register/[register] | Set register 0x[register] to value 0x[payload] |
-| phev/set/parkinglights | Set parking lights *on* or *off* |
-| phev/set/headlights | Set head lights *on* or *off* |
-| phev/set/cancelchargetimer | Cancel charge timer (any payload) |
-| phev/set/climate/[mode] | Set ac/climate state (cool/heat/windscreen/off) for [payload] (10[on]/20/30) |
-| phev/set/climate/state | `[payload]=reset` clears "terminated" state |
-| phev/connection | Change car connection state to (on/off/restart) |
-
-#### Home Assistant discovery
-
-The client supports [Home Assistant MQTT Discovery](https://www.home-assistant.io/docs/mqtt/discovery/) by default.
-
-After initial discovery, re-run the binary for the entities to appear. You can
-search for "phev" in your entity list. Your car should also appear as a device
-in the Devices tab.
-
-You can disable this with `--ha_discovery=false` or change the discovery prefix, the default is `--ha_discovery_prefix=homeassistant`.
-
-#### Raspbian setup with auto-start
-
-It's useful to have the tool auto-start when running on e.g a Raspberry Pi. The following
-describes how to set this up.
-
-- Edit or add to `/etc/systemd/network/00-default.link` with the following:
-
-```
-[Match]
-# This should be the 'real' (default) mac address of the Pi's wireless interface.
-MACAddress=b8:27:eb:50:c0:52
-
-[Link]
-# This should be the MAC address to use to connect to the car, per above.
-MACAddress=ee:4d:ec:de:7a:91
-NamePolicy=kernel database onboard slot path
-
+```sh
+go build -o phev2mqtt .
+./phev2mqtt --help
 ```
 
-- Add the car's Wifi info to `/etc/wpa_supplicant/wpa_supplicant.conf`:
-
-```
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-country=AU
-
-network={
-	ssid="REMOTE45bhds"
-	scan_ssid=1
-	psk="blahblahbla12314"
-}
-
+*(Optional)* For live/offline PCAP decoding with `libpcap`:
+```sh
+go build -tags pcap -o phev2mqtt .
 ```
 
-- Add the following to `/etc/systemd/system/phev2mqtt.service`, updating the MQTT address to
-suit your setup:
+### Build with Docker
 
-```
-[Unit]
-Description=phev2mqtt service script
-StartLimitIntervalSec=5
-After=syslog.target network.target
-
-[Service]
-Type=exec
-ExecStart=/usr/local/bin/phev2mqtt --config=/dev/null client mqtt --mqtt_server tcp://192.168.0.88:1883 -v=debug
-
-# Restart script if stopped
-Restart=always
-# Wait 30s before restart
-RestartSec=30s
-
-# Tag things in the log
-# View with: sudo journalctl -f -u phev2mqtt -o cat
-SyslogIdentifier=phev2mqtt
-
-StandardOutput=syslog
-StandardError=syslog
-
-[Install]
-WantedBy=multi-user.target
+```sh
+docker build -t phev2mqtt .
+docker run --rm --net=host phev2mqtt client mqtt --mqtt_server tcp://192.168.1.10:1883
 ```
 
-- Copy the `phev2mqtt` binary to /usr/local/bin and make sure it's executable.
+---
 
-- Start the service with `sudo systemctl start phev2mqtt.service`
+## CLI Commands
 
-- Enable the service to run at boot, with `sudo systemctl enable phev2mqtt.service`.
+### Register Client MAC with Vehicle
+Put the vehicle into Wi-Fi registration mode, connect to its `REMOTExxxxxx` AP (`192.168.8.47`), and run:
+```sh
+./phev2mqtt client register
+```
 
-- Restart the Pi and verify that it can connect to the car. Also run `ifconfig` and check
-that the `wlan0` interface has the correct mac address. You should also see this interface
-have the IP address `192.168.8.47`.
+### Manage Climate & Charge Timers from CLI
+```sh
+# List all 5 climate and 5 charge timers
+./phev2mqtt client timers list
 
-- Verify that the phev2mqtt service is communicating with the car, by checking
-the logs: `sudo journalctl -f -u phev2mqtt -o cat`
+# Set Climate Timer 1 to 07:10 for 20 minutes on weekdays in Heat mode
+./phev2mqtt client timers set-climate --slot 1 --time 07:10 --duration 20 --days Weekdays --mode heat --enabled
 
-### Sniffing the official client
+# Clear Climate Timer 2
+./phev2mqtt client timers set-climate --slot 2 --clear
 
-Further development of this library can be done with a packet dump of the official
-Mistubishi app.
+# Set Charge Timer 1 from 23:00 to 06:00 every day with Full Charge
+./phev2mqtt client timers set-charge --slot 1 --start 23:00 --end 06:00 --days Everyday --full-charge --enabled
+```
 
-A number of sniffer apps for phones are available for this. Two that the author have
-used are *Packet Capture* and *PCAP Remote*. These do not require root access, yet
-can successfully sniff the traffic into PCAP files for further analysis.
+### Inspect & Modify ETACS / AC Vehicle Settings from CLI
+```sh
+# List all customization settings supported by your vehicle
+./phev2mqtt client settings list
 
-*Packet Capture* can save the PCAP files to your local phone storage which you can
-then extract off the phone.
+# Change auto-fold mirrors or exterior lights on remote unlock
+./phev2mqtt client settings set auto_fold_mirrors "Open/Close by Keyless Lock/Unlock"
+./phev2mqtt client settings set exterior_lights_remote_unlock "Parking lights"
+```
 
-*PCAP Remote* is a little more involved, but allows for live sniffing of the traffic.
+### Synchronize Vehicle Clock
+```sh
+./phev2mqtt client synctime
+```
 
-Once you have downloaded the PCAP file(s) from the phone, you can analyse them with
-the command *phev2mqtt decode pcap <filename>*. First build a `phev2mqtt` with pcap features:
-`go build -tags pcap`; you will need libpcap for this. Adjust the verbosity level (`-v`) between
-`info`, `debug` and `trace` for more details.
+---
 
-Additionally, the flag `--latency` will use the PCAP packet timestamps to decode
-the packets with original timings which can help pinpoint app events.
+## MQTT Gateway Reference
 
-You can also specify *tcp:<host>:<port>* which will connect to that host/port
-over TCP and decode that traffic - useful when live sniffing to a TCP service.
+Start the gateway:
+```sh
+./phev2mqtt client mqtt \
+  --mqtt_server tcp://192.168.1.10:1883 \
+  --mqtt_username user \
+  --mqtt_password secret \
+  --auto_sync_time=true
+```
 
-### Vehicle emulator
+Key gateway flags:
+- `--mqtt_topic_prefix` (default `phev`): Base MQTT topic prefix
+- `--mqtt_retain` (default `true`): Retain semantic state topics on broker
+- `--ha_discovery` (default `true`): Publish Home Assistant MQTT Auto-Discovery configs
+- `--ha_discovery_prefix` (default `homeassistant`): HA discovery prefix
+- `--ha_keep_sensors_available` (default `false`): Keep read-only HA sensors online when car Wi-Fi sleeps
+- `--auto_sync_time` (default `false`): Auto-sync vehicle RTC if drift exceeds 60s
+- `--update_interval` (default `5m`): Periodic full status refresh interval
 
-There is an emulator built in which can be used to test functionality without needing
-a real car (and also reduces risk of putting your car into weird states).
+### Published State Topics (`<prefix>/...`)
 
-Start it with `phev2mqtt emulator` and then you can point a client at it.
+| Topic | Values / Description |
+|-------|----------------------|
+| `phev/bridge/available` | Bridge daemon status (`online` / `offline`, LWT) |
+| `phev/available` | Vehicle Wi-Fi connection status (`online` / `offline`) |
+| `phev/last_seen` | UTC RFC3339 timestamp of last packet from vehicle |
+| `phev/battery/level` | Drive battery SOC (`0`..`100`) |
+| `phev/battery/warning` | Thermal/cold status (`normal`, `warming_up`, `extreme_cold_cannot_charge`, etc.) |
+| `phev/battery/warning_active` | `on` / `off` |
+| `phev/battery/warming` | Battery heater active (`on` / `off`) |
+| `phev/charge/plug` | `connected` / `unplugged` |
+| `phev/charge/plug_state` | `unplugged`, `connected_waiting`, `connected`, `charging` |
+| `phev/charge/charging` | `on` / `off` |
+| `phev/charge/type` | `off`, `normal`, `quick` |
+| `phev/charge/remaining` | Minutes remaining (`0` when idle) |
+| `phev/charge/timer_inhibited` | `on` when plugged in and waiting for timer window |
+| `phev/charge/timer/master` | Master charge timer schedule (`on` / `off`) |
+| `phev/charge/timer/<1..5>` | JSON object (`enabled`, `start`, `end`, `full_charge`, `days`) + subtopics `/enabled`, `/start`, `/end`, `/full_charge`, `/days`, `/summary` |
+| `phev/climate/state` | `off`, `starting`, `delayed`, `heat`, `cool`, `windscreen`, `terminated` |
+| `phev/climate/mode` | `off`, `heat`, `cool`, `windscreen` |
+| `phev/climate/heat`, `/cool`, `/windscreen` | `on` / `off` |
+| `phev/climate/duration` | Selected duration (`10`, `20`, `30`) |
+| `phev/climate/delay` | Selected start delay (`0`, `5`, `10`) |
+| `phev/climate/stop_time` | Target Pre-AC stop time (`HH:MM` or `--:--`) |
+| `phev/climate/timer/master` | Master climate timer schedule (`on` / `off`) |
+| `phev/climate/timer/mode` | Scheduled climate mode (`heat`, `cool`, `windscreen`) |
+| `phev/climate/timer/<1..5>` | JSON object (`enabled`, `time`, `duration`, `days`) + subtopics `/enabled`, `/time`, `/duration`, `/days`, `/summary` |
+| `phev/ignition/state`, `/on` | `off` / `acc` / `on` / `ready`, and `on` / `off` |
+| `phev/alarm/state`, `/triggered` | `disarmed` / `armed` / `triggered`, and `on` / `off` |
+| `phev/alarm/last_event` | Last theft alarm trigger reason and timestamp |
+| `phev/door/locked` | `closed` (locked) / `open` (unlocked) |
+| `phev/door/driver`, `/front_passenger`, `/front_left`, `/front_right`, `/rear_left`, `/rear_right`, `/bonnet`, `/boot` | `open` / `closed` (`front_left`/`front_right` automatically adapt to LHD vs RHD!) |
+| `phev/lights/parking`, `/head`, `/interior`, `/hazard` | `on` / `off` |
+| `phev/clock` | Vehicle RTC (`YYYY-MM-DD HH:MM:SS`) |
+| `phev/wifi/ssid`, `/channel`, `/always_on` | AP SSID, channel (`1..13`), always-active mode (`on`/`off`) |
+| `phev/vin`, `/vin_full`, `/ecuversion`, `/registrations`, `/variant/steering` | Vehicle identification & diagnostics |
+| `phev/settings/<slug>` | Current option label of each supported ETACS/AC setting |
+| `phev/register/<hex>` | Raw hex bytes of each incoming register |
 
-The official app will always try to connect to IP `192.168.8.46`, so you'll need
-to ensure you run `phev2mqtt` on a machine with this IP and which you can
-reach via WIFI. The author uses a Raspberry Pi setup as an AP (using hostapd)
-and runs `phev2mqtt` on it, though you could also tunnel the TCP connection to
-a dev machine.
+### Subscribed Command Topics (`<prefix>/...`)
 
-The app should successfully be able to register with the emulator (it might take
-a couple of goes).
+| Topic | Accepted Payloads |
+|-------|-------------------|
+| `phev/connection` | `on`, `off`, `restart` |
+| `phev/set/refresh` | `press` (forces full register & settings poll `0x06=03`) |
+| `phev/set/synctime` | `now` / `press` or `YYYY-MM-DD HH:MM:SS` |
+| `phev/set/climate/mode` | `off`, `heat`, `cool`, `windscreen` |
+| `phev/set/climate/heat`, `/cool`, `/windscreen` | `on`, `off`, `10`, `20`, `30` |
+| `phev/set/climate/duration` | `10`, `20`, `30` |
+| `phev/set/climate/delay` | `0`, `5`, `10` |
+| `phev/set/climate/reset_error` (or `/state`=`reset`) | Clears Pre-AC `terminated` alert (`0x13=01`) |
+| `phev/set/climate/timer/master` | `on` / `off` |
+| `phev/set/climate/timer/mode` | `heat`, `cool`, `windscreen` |
+| `phev/set/climate/timer/<1..5>` | JSON `{"enabled":true,"time":"07:10","duration":20,"days":"Weekdays"}` or `clear` |
+| `phev/set/climate/timer/<1..5>/enabled` | `on` / `off` |
+| `phev/set/climate/timer/<1..5>/time` | `HH:MM` (rounded to 10-min step) or `--:--` to clear |
+| `phev/set/climate/timer/<1..5>/duration` | `10`, `20`, `30` |
+| `phev/set/climate/timer/<1..5>/days` | `Everyday`, `Weekdays`, `Weekend`, `Mon,Wed,Fri`, `H,K,Sze,Cs,P`, `None` |
+| `phev/set/charge/now` (or `/set/cancelchargetimer`) | Overrides charge timer to start charging immediately |
+| `phev/set/charge/timer/master` | `on` / `off` |
+| `phev/set/charge/timer/<1..5>` | JSON `{"enabled":true,"start":"23:00","end":"06:00","full_charge":true,"days":"Everyday"}` or `clear` |
+| `phev/set/charge/timer/<1..5>/enabled` | `on` / `off` |
+| `phev/set/charge/timer/<1..5>/start`, `/end` | `HH:MM` or `--:--` |
+| `phev/set/charge/timer/<1..5>/full_charge` | `on` / `off` |
+| `phev/set/charge/timer/<1..5>/days` | Day names/presets (English or Hungarian) |
+| `phev/set/parkinglights`, `/set/headlights` | `on` / `off` |
+| `phev/set/lights/locate` | `press` (flashes parking lights for 2 seconds) |
+| `phev/set/alarm/clear` | `press` (clears theft alarm notification) |
+| `phev/set/wifi/channel` | `1`..`13` |
+| `phev/set/wifi/always_on` | `on` / `off` |
+| `phev/set/settings/<slug>` | Option label or numeric index (`0`..`6`); `/set/settings/factory_reset` = `reset` |
+| `phev/set/register/<hex>` | Raw hex bytes (unless `--mqtt_disable_register_set_command`) |
 
-Any settings sent by the app won't actually change state for now, but it can
-be useful for sniffing the app.
+---
+
+## License
+
+Licensed under the GPLv2. Original work Copyright © 2021 Ben Buxton (`bbuxton@gmail.com`).

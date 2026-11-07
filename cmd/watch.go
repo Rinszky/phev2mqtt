@@ -37,6 +37,8 @@ updates, displaying them in real-time.`,
 
 func Run(cmd *cobra.Command, args []string) {
 	address, _ := cmd.Flags().GetString("address")
+	waitDur, _ := cmd.Flags().GetDuration("wait")
+
 	cl, err := client.New(client.AddressOption(address))
 	if err != nil {
 		panic(err)
@@ -45,15 +47,26 @@ func Run(cmd *cobra.Command, args []string) {
 	if err := cl.Connect(); err != nil {
 		panic(err)
 	}
+	defer cl.Close()
 
 	if err := cl.Start(); err != nil {
 		panic(err)
+	}
+
+	var waitCh <-chan time.Time
+	if waitDur > 0 {
+		timer := time.NewTimer(waitDur)
+		defer timer.Stop()
+		waitCh = timer.C
 	}
 
 	var registers = map[byte]string{}
 
 	for {
 		select {
+		case <-waitCh:
+			log.Infof("Watch duration (%s) elapsed, disconnecting.", waitDur)
+			return
 		case m, ok := <-cl.Recv:
 			if !ok {
 				log.Infof("Connection closed.")
@@ -61,21 +74,26 @@ func Run(cmd *cobra.Command, args []string) {
 			}
 			switch m.Type {
 			case protocol.CmdInResp:
+				if m.Ack != protocol.Request {
+					break
+				}
 				dataStr := hex.EncodeToString(m.Data)
-				if data := registers[m.Register]; data != dataStr {
+				if data := registers[m.Register]; data != dataStr || m.Register == protocol.SettingsRegister {
 					log.Infof("%%PHEV_REG_UPDATE%% %02x: %s -> %s", m.Register, data, dataStr)
 					registers[m.Register] = dataStr
-					if _, ok := m.Reg.(*protocol.RegisterGeneric); !ok {
-						log.Infof("%%PHEV_REG_UPDATE%% %02x: [%s]", m.Register, m.Reg.String())
+					if m.Reg != nil {
+						if _, ok := m.Reg.(*protocol.RegisterGeneric); !ok {
+							log.Infof("%%PHEV_REG_UPDATE%% %02x: [%s]", m.Register, m.Reg.String())
+						}
 					}
 				}
-				cl.Send <- &protocol.PhevMessage{
+				_ = cl.SendMessage(&protocol.PhevMessage{
 					Type:     protocol.CmdOutSend,
 					Register: m.Register,
 					Ack:      protocol.Ack,
 					Xor:      m.Xor,
 					Data:     []byte{0x0},
-				}
+				})
 			}
 		}
 	}
@@ -84,14 +102,5 @@ func Run(cmd *cobra.Command, args []string) {
 func init() {
 	clientCmd.AddCommand(watchCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// watchCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// watchCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	watchCmd.Flags().DurationP("wait", "w", 60*time.Second, "How long to hold connection open for")
+	watchCmd.Flags().DurationP("wait", "w", 0, "How long to hold connection open for (0 = indefinitely)")
 }
