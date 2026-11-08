@@ -61,6 +61,7 @@ type climate struct {
 	mode             *string
 	operating        bool
 	delayPending     bool
+	hasOper          bool // register 0x1a received at least once
 	selectedDuration int // 10, 20, 30
 	selectedDelay    int // 0, 5, 10
 	stopTime         string
@@ -88,6 +89,7 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 }
 
 func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
+	c.hasOper = true
 	c.operating = reg.Operating
 	c.delayPending = reg.DelayPending
 	if reg.Duration == 10 || reg.Duration == 20 || reg.Duration == 30 {
@@ -111,6 +113,15 @@ func (c *climate) mqttStates() map[string]string {
 		"/climate/stop_time":  c.stopTime,
 	}
 	if c.state == nil {
+		return m
+	}
+	// When a climate timer is armed the ECU reports PreACStarting/PreACOn in
+	// 0x10 (with the scheduled time), but 0x1a reports the AC as neither
+	// operating nor delayed. The official app treats that as "timer armed",
+	// not as an immediate AC session, so we do the same.
+	if c.hasOper && !c.operating && !c.delayPending &&
+		(*c.state == protocol.PreACStarting || *c.state == protocol.PreACOn) {
+		m["/climate/stop_time"] = "--:--"
 		return m
 	}
 	activeMode := "heat"
@@ -156,6 +167,15 @@ func (c *climate) mqttStates() map[string]string {
 		m["/climate/windscreen"] = "on"
 	}
 	return m
+}
+
+// chargeCompletionTime returns the estimated charge completion as an RFC3339
+// timestamp rounded to the minute, or "none" when unknown.
+func chargeCompletionTime(charging bool, remainingMin int, now time.Time) string {
+	if !charging || remainingMin <= 0 || remainingMin >= 1000 {
+		return "none"
+	}
+	return now.Add(time.Duration(remainingMin) * time.Minute).Truncate(time.Minute).Format(time.RFC3339)
 }
 
 var lastWifiRestart time.Time
@@ -902,14 +922,9 @@ func (m *mqttClient) handleClimateTimerCommand(cl *client.Client, rest, payload 
 		log.Infof("Error writing climate timer schedule 0x1a: %v", err)
 		return
 	}
-	masterByte := byte(0x01)
-	if anyEnabled {
-		masterByte = 0x02
-	}
-	if err := cl.SetRegister(protocol.SetClimateTimerMasterReg, []byte{masterByte}); err != nil {
-		log.Infof("Error writing climate timer master 0x03: %v", err)
-		return
-	}
+	// The official app (frmEVACSet20) sends only Write 0x1a when saving MY18
+	// climate timers; it also arms/disarms the timer master. Write 0x03 is
+	// reserved for the standalone master toggle, so we don't send it here.
 	m.publishClimateSchedule(&schedSnap)
 }
 
@@ -1395,8 +1410,10 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		m.publish("/charge/type", reg.ChargeType)
 		if !reg.Charging {
 			m.publish("/charge/remaining", "0")
+			m.publish("/charge/completion_time", "none")
 		} else if reg.Remaining < 1000 {
 			m.publish("/charge/remaining", strconv.Itoa(reg.Remaining))
+			m.publish("/charge/completion_time", chargeCompletionTime(true, reg.Remaining, time.Now()))
 		} else {
 			log.Debugf("Ignoring charge remaining reading: %v", reg.Remaining)
 			m.mu.RLock()
@@ -1404,6 +1421,8 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 			m.mu.RUnlock()
 			if cache != "" {
 				m.publish("/charge/remaining", cache)
+				rem, _ := strconv.Atoi(cache)
+				m.publish("/charge/completion_time", chargeCompletionTime(true, rem, time.Now()))
 			}
 		}
 
@@ -1777,6 +1796,18 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 				"state_topic":         "~/charge/remaining",
 				"unit_of_measurement": "min",
 				"avty_t":              sensAvty,
+			},
+		},
+		{
+			component: "sensor",
+			suffix:    "charge_completion_time",
+			fields: map[string]interface{}{
+				"name":           name + " Estimated Charge Completion",
+				"icon":           "mdi:battery-clock-outline",
+				"device_class":   "timestamp",
+				"state_topic":    "~/charge/completion_time",
+				"value_template": "{{ value if value not in ['none', ''] else none }}",
+				"avty_t":         sensAvty,
 			},
 		},
 		{
