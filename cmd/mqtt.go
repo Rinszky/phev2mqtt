@@ -922,9 +922,14 @@ func (m *mqttClient) handleClimateTimerCommand(cl *client.Client, rest, payload 
 		log.Infof("Error writing climate timer schedule 0x1a: %v", err)
 		return
 	}
-	// The official app (frmEVACSet20) sends only Write 0x1a when saving MY18
-	// climate timers; it also arms/disarms the timer master. Write 0x03 is
-	// reserved for the standalone master toggle, so we don't send it here.
+	masterByte := byte(0x01)
+	if anyEnabled {
+		masterByte = 0x02
+	}
+	if err := cl.SetRegister(protocol.SetClimateTimerMasterReg, []byte{masterByte}); err != nil {
+		log.Infof("Error writing climate timer master 0x03: %v", err)
+		return
+	}
 	m.publishClimateSchedule(&schedSnap)
 }
 
