@@ -1,8 +1,7 @@
-# ESP32-S3 Partition Table (Compatible with 8MB and 16MB Flash)
+# Universal ESP32 Partition Table (Compatible with 4MB, 8MB and 16MB Flash)
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x5000,
 otadata,  data, ota,     0xe000,   0x2000,
-app0,     app,  ota_0,   0x10000,  0x340000,
-app1,     app,  ota_1,   0x350000, 0x340000,
-spiffs,   data, spiffs,  0x690000, 0x150000,
-coredump, data, coredump,0x7e0000, 0x10000,
+app0,     app,  ota_0,   0x10000,  0x1e0000,
+app1,     app,  ota_1,   0x1f0000, 0x1e0000,
+spiffs,   data, spiffs,  0x3d0000, 0x20000,

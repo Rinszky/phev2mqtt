@@ -5,6 +5,8 @@
 #include <PubSubClient.h>
 #include <Client.h>
 #include "phev_client.h"
+#include "cellular_modem.h"
+#include "obd_reader.h"
 
 class MqttManager {
 public:
@@ -16,7 +18,9 @@ public:
                const char* user,
                const char* pass,
                const char* prefix,
-               PhevClient* phevClient);
+               PhevClient* phevClient,
+               CellularModem* modem = nullptr,
+               ObdReader* obdReader = nullptr);
     void loop();
 
     bool isConnected();
@@ -39,6 +43,8 @@ private:
     bool m_haDiscovery;
     bool m_haPublished;
     PhevClient* m_phev;
+    CellularModem* m_modem;
+    ObdReader* m_obd;
     uint32_t m_lastConnectAttempt;
     uint32_t m_lastStatePublish;
 
@@ -47,8 +53,6 @@ private:
     void subscribeCommands();
     void handleMessage(char* topic, uint8_t* payload, unsigned int length);
     static void callbackStatic(char* topic, uint8_t* payload, unsigned int length);
-
-    void publishHADiscoveryDevice();
 };
 
 #endif // MQTT_MANAGER_H

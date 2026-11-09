@@ -9,7 +9,7 @@ class CellularModem {
 public:
     CellularModem();
 
-    bool begin(const char* apn, const char* user = "", const char* pass = "");
+    bool begin(const char* apn, const char* user = "", const char* pass = "", const char* pin = "");
     void loop();
 
     bool isConnected() const { return m_connected; }
@@ -25,11 +25,23 @@ public:
 
     Client* getNetworkClient();
 
+    // GPS / GNSS Tracking
+    bool enableGPS();
+    bool disableGPS();
+    bool pollGPS();
+    bool isGPSFix() const { return m_gpsFix; }
+    float getLatitude() const { return m_latitude; }
+    float getLongitude() const { return m_longitude; }
+    float getSpeed() const { return m_speed; }
+    float getAltitude() const { return m_altitude; }
+    int getSatellites() const { return m_satellites; }
+
 private:
     HardwareSerial m_serial;
     String m_apn;
     String m_user;
     String m_pass;
+    String m_pin;
     bool m_connected;
     bool m_powered;
     bool m_sleeping;
@@ -39,7 +51,16 @@ private:
     String m_imei;
     uint32_t m_lastConnCheck;
 
-    bool sendATCommand(const char* cmd, const char* expected, uint32_t timeoutMs = 2000, String* response = nullptr);
+    // GPS State
+    bool m_gpsEnabled;
+    bool m_gpsFix;
+    float m_latitude;
+    float m_longitude;
+    float m_speed;
+    float m_altitude;
+    int m_satellites;
+    uint32_t m_lastGpsPoll;
+
     bool initModem();
     bool connectGPRS();
 };

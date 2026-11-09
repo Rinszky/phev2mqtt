@@ -3,6 +3,7 @@
 #include "logger.h"
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
+#include <WiFi.h>
 
 #define TAG "PWR"
 

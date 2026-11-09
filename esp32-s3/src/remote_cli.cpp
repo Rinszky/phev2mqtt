@@ -1,6 +1,7 @@
 #include "remote_cli.h"
 #include "logger.h"
 #include "ota_manager.h"
+#include "config_manager.h"
 
 #define TAG "CLI"
 
@@ -9,15 +10,17 @@ RemoteCLI::RemoteCLI()
       m_authenticated(false),
       m_phev(nullptr),
       m_modem(nullptr),
-      m_pwr(nullptr) {
+      m_pwr(nullptr),
+      m_obd(nullptr) {
 }
 
 void RemoteCLI::begin(uint16_t port, const char* password,
-                      PhevClient* phev, CellularModem* modem, PowerManager* pwr) {
+                      PhevClient* phev, CellularModem* modem, PowerManager* pwr, ObdReader* obd) {
     m_password = password;
     m_phev = phev;
     m_modem = modem;
     m_pwr = pwr;
+    m_obd = obd;
     m_server = WiFiServer(port);
     m_server.begin();
     LOG_I(TAG, "Remote CLI maintenance shell listening on port %d", port);
@@ -111,6 +114,10 @@ void RemoteCLI::executeCommand(const String& cmd) {
         m_activeClient.println("  reboot               - Safe reboot ESP32-S3");
         m_activeClient.println("  sleep                - Force duty-cycle low power sleep now");
         m_activeClient.println("  ota <http_url>       - Trigger remote firmware OTA update");
+        m_activeClient.println("  obd                  - Show live Bluetooth OBD2/BMU diagnostics (SOH, cells, kW)");
+        m_activeClient.println("  setup                - Start Web Captive Portal Hotspot for configuration");
+        m_activeClient.println("  config               - Display current stored configuration");
+        m_activeClient.println("  factoryreset         - Wipe stored configuration and reboot into Setup mode");
         m_activeClient.println("  exit / quit          - Close session");
     } else if (cmd == "status") {
         m_activeClient.printf("Firmware: ESP32-S3 PHEV Bridge (Dual STA+LTE)\n");
@@ -127,6 +134,19 @@ void RemoteCLI::executeCommand(const String& cmd) {
             m_activeClient.printf("LTE Modem:   %s (CSQ: %d, Op: %s)\n",
                                   m_modem->isConnected() ? "Connected" : "Disconnected",
                                   m_modem->getSignalQuality(), m_modem->getOperator().c_str());
+            if (m_modem->isGPSFix()) {
+                m_activeClient.printf("GPS Location:Lat=%.6f, Lon=%.6f, Speed=%.1f km/h, Sats=%d\n",
+                                      m_modem->getLatitude(), m_modem->getLongitude(),
+                                      m_modem->getSpeed(), m_modem->getSatellites());
+            } else {
+                m_activeClient.printf("GPS Status:  Acquiring fix / No satellite lock\n");
+            }
+        }
+
+        if (m_obd) {
+            m_activeClient.printf("OBD2 Link:   %s (ECU/BMU: %s)\n",
+                                  m_obd->isConnected() ? "Connected" : "Disconnected",
+                                  m_obd->isEcuResponding() ? "Responding / Active" : "Sleeping / No Data");
         }
 
         if (m_phev) {
@@ -206,6 +226,60 @@ void RemoteCLI::executeCommand(const String& cmd) {
         } else {
             m_activeClient.println("OTA Failed! Check logs.");
         }
+    } else if (cmd == "obd") {
+        if (!m_obd) {
+            m_activeClient.println("OBD2 service is not enabled.");
+        } else {
+            m_activeClient.println("=================================================");
+            m_activeClient.println("  Mitsubishi Outlander PHEV OBD2 / BMU Telemetry ");
+            m_activeClient.println("=================================================");
+            m_activeClient.printf("Bluetooth Link:   %s\n", m_obd->isConnected() ? "CONNECTED" : "DISCONNECTED");
+            m_activeClient.printf("ECU Diagnostics:  %s\n", m_obd->isEcuResponding() ? "ACTIVE (Awake)" : "NO DATA (Car Asleep / Off)");
+            
+            ObdTelemetry t = m_obd->getTelemetry();
+            if (t.lastUpdate > 0) {
+                m_activeClient.printf("Last Sample:      %u seconds ago\n", (millis() - t.lastUpdate) / 1000);
+            }
+            m_activeClient.printf("State of Health:  %.1f %%\n", t.soh);
+            m_activeClient.printf("Battery Capacity: %.1f Ah (Remaining: %.1f Ah)\n", t.capacityAh, t.remainingAh);
+            m_activeClient.printf("Cell Voltages(80):Min: %u mV, Max: %u mV, Delta: %u mV, Avg: %u mV\n",
+                                  t.cellVoltageMin, t.cellVoltageMax, t.cellVoltageDelta, t.cellVoltageAvg);
+            m_activeClient.printf("Pack Temperature: Min: %d °C, Max: %d °C, Avg: %d °C\n",
+                                  t.tempMin, t.tempMax, t.tempAvg);
+            m_activeClient.printf("HV Traction Pack: %.1f V, %.1f A (%.2f kW)\n",
+                                  t.packVoltage, t.packCurrent, t.packPowerKw);
+            m_activeClient.printf("Fuel Level:       %.1f Liters\n", t.fuelRemainingLiters);
+            m_activeClient.printf("Engine Coolant:   %d °C\n", t.coolantTemp);
+            m_activeClient.printf("Odometer:         %u km\n", t.odometer);
+            m_activeClient.printf("Motors (F / R):   %.1f kW / %.1f kW\n", t.frontMotorKw, t.rearMotorKw);
+            m_activeClient.println("=================================================");
+        }
+    } else if (cmd == "setup") {
+        ConfigManager::startSetupPortal("PHEV-Bridge-Setup");
+        m_activeClient.println("Captive Portal Hotspot 'PHEV-Bridge-Setup' started!");
+        m_activeClient.println("Connect to the Wi-Fi with your phone and browse to http://192.168.4.1");
+    } else if (cmd == "config") {
+        AppConfig c = ConfigManager::current();
+        m_activeClient.println("--- STORED CONFIGURATION ---");
+        m_activeClient.printf("Configured:     %s\n", c.configured ? "YES" : "NO (Defaults)");
+        m_activeClient.printf("Vehicle SSID:   %s\n", c.wifi_ssid.c_str());
+        m_activeClient.printf("Max SOC Scale:  %d %%\n", c.battery_max_soc);
+        m_activeClient.printf("Cellular APN:   %s (SIM PIN: %s)\n", c.lte_apn.c_str(), c.sim_pin.length() > 0 ? "****" : "None");
+        m_activeClient.printf("WireGuard VPN:  %s (Host: %s:%d, IP: %s)\n",
+                              c.wg_enabled ? "Enabled" : "Disabled",
+                              c.wg_endpoint_host.c_str(), c.wg_endpoint_port, c.wg_local_ip.c_str());
+        m_activeClient.printf("MQTT Broker:    %s:%d (User: %s, Prefix: %s)\n",
+                              c.mqtt_server.c_str(), c.mqtt_port, c.mqtt_user.c_str(), c.mqtt_prefix.c_str());
+        m_activeClient.printf("OBD2 Bluetooth: %s (Device: %s, PIN: %s, Nom: %.1f Ah)\n",
+                              c.obd_enabled ? "Enabled" : "Disabled",
+                              c.obd_device_name.c_str(), c.obd_pin.c_str(), c.obd_nominal_ah);
+        m_activeClient.println("----------------------------");
+    } else if (cmd == "factoryreset") {
+        m_activeClient.println("Erasing all configuration from NVS flash...");
+        ConfigManager::reset();
+        m_activeClient.println("Configuration erased. Rebooting in 1s into Setup Hotspot mode...");
+        delay(1000);
+        ESP.restart();
     } else if (cmd == "exit" || cmd == "quit") {
         m_activeClient.println("Session closed.");
         m_activeClient.stop();

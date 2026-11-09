@@ -7,13 +7,14 @@
 #include "phev_client.h"
 #include "cellular_modem.h"
 #include "power_manager.h"
+#include "obd_reader.h"
 
 class RemoteCLI {
 public:
     RemoteCLI();
 
     void begin(uint16_t port, const char* password,
-               PhevClient* phev, CellularModem* modem, PowerManager* pwr);
+               PhevClient* phev, CellularModem* modem, PowerManager* pwr, ObdReader* obd = nullptr);
     void loop();
 
 private:
@@ -24,6 +25,7 @@ private:
     PhevClient* m_phev;
     CellularModem* m_modem;
     PowerManager* m_pwr;
+    ObdReader* m_obd;
     String m_cmdBuffer;
 
     void handleClient();

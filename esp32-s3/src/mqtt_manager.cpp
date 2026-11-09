@@ -11,6 +11,8 @@ MqttManager::MqttManager()
       m_haDiscovery(true),
       m_haPublished(false),
       m_phev(nullptr),
+      m_modem(nullptr),
+      m_obd(nullptr),
       m_lastConnectAttempt(0),
       m_lastStatePublish(0) {
     s_instance = this;
@@ -33,7 +35,9 @@ bool MqttManager::begin(Client& netClient,
                         const char* user,
                         const char* pass,
                         const char* prefix,
-                        PhevClient* phevClient) {
+                        PhevClient* phevClient,
+                        CellularModem* modem,
+                        ObdReader* obdReader) {
     m_server = server;
     m_port = port;
     m_user = user;
@@ -41,6 +45,8 @@ bool MqttManager::begin(Client& netClient,
     m_prefix = prefix;
     m_haPrefix = "homeassistant";
     m_phev = phevClient;
+    m_modem = modem;
+    m_obd = obdReader;
 
     m_mqtt.setClient(netClient);
     m_mqtt.setServer(server, port);
@@ -165,6 +171,86 @@ void MqttManager::publishAllStates() {
     publish("/system/vin", m_phev->getVIN().c_str());
     publish("/system/ecu_version", m_phev->getECUVersion().c_str());
     publish("/system/uptime", (int)(millis() / 1000));
+
+    // 6. GPS Location & Tracking (Home Assistant Map)
+    if (m_modem && m_modem->isGPSFix()) {
+        JsonDocument gpsDoc;
+        gpsDoc["latitude"] = m_modem->getLatitude();
+        gpsDoc["longitude"] = m_modem->getLongitude();
+        gpsDoc["gps_accuracy"] = 10;
+        gpsDoc["altitude"] = m_modem->getAltitude();
+        gpsDoc["speed"] = m_modem->getSpeed();
+        gpsDoc["satellites"] = m_modem->getSatellites();
+        gpsDoc["battery_level"] = bat.scaledLevel;
+        String gpsPayload;
+        serializeJson(gpsDoc, gpsPayload);
+        publish("/location/state", gpsPayload.c_str());
+        publish("/location/status", "tracking");
+
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.6f", m_modem->getLatitude());
+        publish("/location/latitude", buf);
+        snprintf(buf, sizeof(buf), "%.6f", m_modem->getLongitude());
+        publish("/location/longitude", buf);
+        snprintf(buf, sizeof(buf), "%.1f", m_modem->getSpeed());
+        publish("/location/speed", buf);
+        publish("/location/satellites", m_modem->getSatellites());
+    }
+
+    // 7. OBD2 & BMU Battery Diagnostics (PHEV Watchdog Telemetry)
+    if (m_obd) {
+        publish("/obd/connected", m_obd->isConnected() ? "connected" : "disconnected");
+        publish("/obd/ecu_active", m_obd->isEcuResponding() ? "active" : "inactive");
+
+        if (m_obd->isEcuResponding()) {
+            ObdTelemetry t = m_obd->getTelemetry();
+            char buf[32];
+
+            if (t.soh > 0.0f) {
+                snprintf(buf, sizeof(buf), "%.1f", t.soh);
+                publish("/obd/battery_soh", buf);
+            }
+            if (t.capacityAh > 0.0f) {
+                snprintf(buf, sizeof(buf), "%.1f", t.capacityAh);
+                publish("/obd/battery_capacity_ah", buf);
+            }
+            if (t.cellVoltageMin > 0) {
+                publish("/obd/cell_min_mv", (int)t.cellVoltageMin);
+                publish("/obd/cell_max_mv", (int)t.cellVoltageMax);
+                publish("/obd/cell_delta_mv", (int)t.cellVoltageDelta);
+                publish("/obd/cell_avg_mv", (int)t.cellVoltageAvg);
+            }
+            if (t.tempMin > -40) {
+                publish("/obd/battery_temp_min", (int)t.tempMin);
+                publish("/obd/battery_temp_max", (int)t.tempMax);
+                publish("/obd/battery_temp_avg", (int)t.tempAvg);
+            }
+            if (t.packVoltage > 50.0f) {
+                snprintf(buf, sizeof(buf), "%.1f", t.packVoltage);
+                publish("/obd/pack_voltage", buf);
+                snprintf(buf, sizeof(buf), "%.1f", t.packCurrent);
+                publish("/obd/pack_current", buf);
+                snprintf(buf, sizeof(buf), "%.2f", t.packPowerKw);
+                publish("/obd/pack_power_kw", buf);
+            }
+            if (t.fuelRemainingLiters > 0.0f) {
+                snprintf(buf, sizeof(buf), "%.1f", t.fuelRemainingLiters);
+                publish("/obd/fuel_liters", buf);
+            }
+            if (t.coolantTemp > -40) {
+                publish("/obd/coolant_temp", (int)t.coolantTemp);
+            }
+            if (t.odometer > 0) {
+                publish("/obd/odometer", (int)t.odometer);
+            }
+            if (abs(t.frontMotorKw) > 0.1f || abs(t.rearMotorKw) > 0.1f) {
+                snprintf(buf, sizeof(buf), "%.1f", t.frontMotorKw);
+                publish("/obd/motor_front_kw", buf);
+                snprintf(buf, sizeof(buf), "%.1f", t.rearMotorKw);
+                publish("/obd/motor_rear_kw", buf);
+            }
+        }
+    }
 }
 
 void MqttManager::handleMessage(char* topicStr, uint8_t* payload, unsigned int length) {
@@ -313,6 +399,44 @@ void MqttManager::publishDiscovery() {
     publishSwitch("climate/windscreen", "Windscreen Defrost", "mdi:weather-windy");
     publishSwitch("lights/head", "Headlights", "mdi:car-light-high");
     publishSwitch("lights/parking", "Parking Lights", "mdi:car-parking-lights");
+
+    // Home Assistant Device Tracker (Car Map Integration)
+    doc.clear();
+    doc["name"] = "Location";
+    doc["unique_id"] = vin + "_location";
+    doc["json_attributes_topic"] = topic("/location/state");
+    doc["state_topic"] = topic("/location/status");
+    doc["source_type"] = "gps";
+    doc["icon"] = "mdi:car-connected";
+    doc["device"] = dev;
+    String trackerConfigTopic = m_haPrefix + "/device_tracker/" + vin + "/tracker/config";
+    String trackerPayload;
+    serializeJson(doc, trackerPayload);
+    m_mqtt.publish(trackerConfigTopic.c_str(), trackerPayload.c_str(), true);
+
+    // Individual GPS telemetry sensors
+    publishSensor("sensor", "location/latitude", "GPS Latitude", nullptr, nullptr, "mdi:latitude");
+    publishSensor("sensor", "location/longitude", "GPS Longitude", nullptr, nullptr, "mdi:longitude");
+    publishSensor("sensor", "location/speed", "GPS Speed", "speed", "km/h", "mdi:speedometer");
+    publishSensor("sensor", "location/satellites", "GPS Satellites", nullptr, nullptr, "mdi:satellite-variant");
+
+    // OBD2 & BMU Battery Health Sensors (PHEV Watchdog integration)
+    publishSensor("binary_sensor", "obd/connected", "OBD Bluetooth Connected", "connectivity", nullptr, "mdi:bluetooth-connect");
+    publishSensor("binary_sensor", "obd/ecu_active", "BMU ECU Diagnostics Active", "power", nullptr, "mdi:car-electric");
+    publishSensor("sensor", "obd/battery_soh", "Traction Battery SOH", nullptr, "%", "mdi:battery-heart");
+    publishSensor("sensor", "obd/battery_capacity_ah", "Traction Battery Capacity", nullptr, "Ah", "mdi:battery-high");
+    publishSensor("sensor", "obd/cell_min_mv", "Lowest Cell Voltage", "voltage", "mV", "mdi:battery-arrow-down");
+    publishSensor("sensor", "obd/cell_max_mv", "Highest Cell Voltage", "voltage", "mV", "mdi:battery-arrow-up");
+    publishSensor("sensor", "obd/cell_delta_mv", "Cell Voltage Imbalance", nullptr, "mV", "mdi:delta");
+    publishSensor("sensor", "obd/cell_avg_mv", "Average Cell Voltage", "voltage", "mV", "mdi:battery-outline");
+    publishSensor("sensor", "obd/battery_temp_min", "Battery Min Temp", "temperature", "°C", "mdi:thermometer-low");
+    publishSensor("sensor", "obd/battery_temp_max", "Battery Max Temp", "temperature", "°C", "mdi:thermometer-high");
+    publishSensor("sensor", "obd/pack_voltage", "HV Traction Voltage", "voltage", "V", "mdi:lightning-bolt");
+    publishSensor("sensor", "obd/pack_current", "HV Traction Current", "current", "A", "mdi:current-dc");
+    publishSensor("sensor", "obd/pack_power_kw", "HV Traction Power", "power", "kW", "mdi:flash");
+    publishSensor("sensor", "obd/fuel_liters", "Fuel Remaining", nullptr, "L", "mdi:gas-station");
+    publishSensor("sensor", "obd/coolant_temp", "Engine Coolant Temp", "temperature", "°C", "mdi:coolant-temperature");
+    publishSensor("sensor", "obd/odometer", "Odometer", "distance", "km", "mdi:counter");
 
     m_haPublished = true;
     LOG_I(TAG, "Home Assistant discovery configs published successfully!");

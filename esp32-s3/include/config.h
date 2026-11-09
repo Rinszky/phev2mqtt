@@ -15,28 +15,35 @@
 #define PHEV_POLL_INTERVAL_MS        30000
 
 // ==============================================================================
-// 2. LTE CELLULAR MODEM (UART & Power Control)
+// 2. LTE CELLULAR MODEM (LilyGO T-A7670E R2 Pinout & Power Control)
 // ==============================================================================
-// Supported modules: SIM7600, SIM7000, A7670, EC25, BG96
-#define TINY_GSM_MODEM_SIM7600       // Define your modem family
+#ifndef TINY_GSM_MODEM_SIM7600
+#define TINY_GSM_MODEM_SIM7600       // SIMCom A7670E uses SIM7600 AT command set in TinyGSM
+#endif
 #define MODEM_UART_NUM               1
-#define MODEM_TX_PIN                 17 // ESP32-S3 TX -> Modem RX
-#define MODEM_RX_PIN                 18 // ESP32-S3 RX -> Modem TX
-#define MODEM_PWRKEY_PIN             4  // Pulse to power ON/OFF
-#define MODEM_RESET_PIN              5  // Hardware reset pin
-#define MODEM_DTR_PIN                6  // Sleep / wake control (DTR high=sleep)
-#define MODEM_STATUS_PIN             7  // Status indicator pin
+#define MODEM_TX_PIN                 26 // LilyGO Pin 26 (ESP32 RX <- Modem TX)
+#define MODEM_RX_PIN                 27 // LilyGO Pin 27 (ESP32 TX -> Modem RX)
+#define MODEM_PWRKEY_PIN             4  // LilyGO Pin 4 (PWRKEY pulse)
+#define MODEM_RESET_PIN              5  // LilyGO Pin 5 (Hardware Reset)
+#define MODEM_DTR_PIN                25 // LilyGO Pin 25 (Sleep/Wake control)
+#define MODEM_POWERON_PIN            12 // LilyGO Pin 12 (Board peripheral power enable)
+#define MODEM_RING_PIN               33 // LilyGO Pin 33 (Ring indicator)
 #define MODEM_BAUDRATE               115200
 
-// Cellular APN (e.g. "internet", "online", "vodafone", "telekom")
-#define DEFAULT_LTE_APN              "internet"
+// Cellular APN (Telekom: "net", Yettel: "net", Vodafone: "internet", Digi: "internet")
+#define DEFAULT_LTE_APN              "net"
 #define DEFAULT_LTE_USER             ""
 #define DEFAULT_LTE_PASS             ""
 
 // ==============================================================================
-// 3. WIREGUARD VPN CONFIGURATION (Tunnel to Home Network)
+// 3. GPS / GNSS VEHICLE TRACKING (Home Assistant Device Tracker)
 // ==============================================================================
-// Ultra-lightweight native VPN allowing secure, NAT-traversing access to home LAN
+#define GPS_ENABLED                  true
+#define GPS_POLL_INTERVAL_SEC        15 // Send GPS update to Home Assistant every 15s
+
+// ==============================================================================
+// 4. WIREGUARD VPN CONFIGURATION (Tunnel to Home Network)
+// ==============================================================================
 #define DEFAULT_WG_LOCAL_IP          "10.0.0.50"
 #define DEFAULT_WG_NETMASK           "255.255.255.0"
 #define DEFAULT_WG_PRIVATE_KEY       "aA11...=" // ESP32 base64 private key
@@ -46,10 +53,9 @@
 #define DEFAULT_WG_ALLOWED_IPS       "10.0.0.0/24,192.168.1.0/24"
 
 // ==============================================================================
-// 4. MQTT & HOME ASSISTANT CONFIGURATION
+// 5. MQTT & HOME ASSISTANT CONFIGURATION
 // ==============================================================================
-// MQTT broker is reached via the WireGuard VPN tunnel
-#define DEFAULT_MQTT_SERVER          "10.0.0.1" // or "192.168.1.100" (home broker)
+#define DEFAULT_MQTT_SERVER          "10.0.0.1" // or "192.168.1.100" (home broker via VPN)
 #define DEFAULT_MQTT_PORT            1883
 #define DEFAULT_MQTT_USER            "phev_user"
 #define DEFAULT_MQTT_PASS            "phev_pass"
@@ -59,25 +65,38 @@
 #define DEFAULT_BATTERY_MAX_SOC      94 // Scale 94% raw BMU reading smoothly to 100%
 
 // ==============================================================================
-// 5. 12V AUXILIARY BATTERY PROTECTION & LOW-POWER MODES
+// 6. POWER & BATTERY MONITORING
 // ==============================================================================
-// Protects the car's 35-45Ah 12V lead-acid / AGM auxiliary battery.
-// Voltage divider on ADC1 (e.g. 100k Ohm high-side + 10k Ohm low-side -> 11:1)
-#define BATTERY_12V_ADC_PIN          1  // GPIO1 (ADC1_CH0)
-#define BATTERY_12V_DIVIDER_RATIO    11.0f
-#define BATTERY_12V_LOW_CUTOFF       11.90f // Below 11.9V: Emergency deep sleep
-#define BATTERY_12V_SAFE_RESTART     12.60f // Wake only when alternator/charger charges it
+// On LilyGO T-A7670E, GPIO 35 is connected to the onboard lithium battery circuit (2:1 divider)
+#define BATTERY_ADC_PIN              35
+#define BATTERY_DIVIDER_RATIO        2.0f
+#define BATTERY_LOW_CUTOFF           3.30f // For LiPo/18650 cell (< 3.3V)
+
+// PowerManager compatibility aliases
+#define BATTERY_12V_ADC_PIN          BATTERY_ADC_PIN
+#define BATTERY_12V_DIVIDER_RATIO    BATTERY_DIVIDER_RATIO
+#define BATTERY_12V_LOW_CUTOFF       BATTERY_LOW_CUTOFF
 
 // Inactivity threshold: If not plugged into EV charger or driven for 3-4 days
 #define INACTIVITY_SLEEP_HOURS       72 // 3 days (72 hours)
-#define DUTY_CYCLE_SLEEP_MINUTES     30 // Sleep for 30 minutes in low-power mode
+#define DUTY_CYCLE_SLEEP_MINUTES     15 // Sleep for 15 minutes in low-power mode
 #define DUTY_CYCLE_WAKE_SECONDS      45 // Wake for 45s to poll car and check MQTT commands
 
 // ==============================================================================
-// 6. REMOTE MAINTENANCE, CLI SHELL & OTA
+// 7. REMOTE MAINTENANCE, CLI SHELL & OTA
 // ==============================================================================
 #define REMOTE_CLI_PORT              2222 // Telnet/TCP CLI shell over VPN tunnel
 #define REMOTE_CLI_PASSWORD          "phevadmin"
 #define LOG_BUFFER_SIZE              8192 // In-memory ring buffer for live log dump
+
+// ==============================================================================
+// 8. OBD2 BLUETOOTH TELEMETRY (PHEV Watchdog & BMU Battery Diagnostics)
+// ==============================================================================
+#define OBD_BLUETOOTH_ENABLED        true
+#define OBD_BLUETOOTH_DEVICE_NAME    "OBDII"      // Bluetooth name of ELM327 adapter (e.g. "OBDII", "vgate", "Android-Vlink")
+#define OBD_BLUETOOTH_PIN            "1234"       // Bluetooth pairing PIN ("1234" or "0000")
+#define OBD_BLUETOOTH_MAC            ""           // Optional: specify MAC "AA:BB:CC:DD:EE:FF" to bind to specific adapter
+#define OBD_POLL_INTERVAL_SEC        10           // Telemetry poll interval while driving or charging (seconds)
+#define OBD_NOMINAL_BATTERY_AH       38.0f        // 38.0 Ah for 12 kWh (2013-2018), 46.0 Ah for 13.8 kWh (2019+)
 
 #endif // PHEV_CONFIG_H

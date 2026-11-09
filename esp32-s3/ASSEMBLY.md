@@ -70,20 +70,12 @@ Két megvalósítási út lehetséges:
 
 | Tétel | Mennyiség | Megnevezés / Típus | Ajánlott forrás / Cikkszám | Becsült ár | Megjegyzés |
 |---|---|---|---|---|---|
-| **1** | 1 db | **ESP32-S3 Fejlesztői Kártya** | ESP32-S3-DevKitC-1-N16R8 (16MB Flash, 8MB PSRAM) | ~3 500 Ft | Csak a B opcióhoz kell |
-| **2** | 1 db | **4G LTE Mobil Modem** | Waveshare SIM7600G-H vagy SIMCOM A7670E UART modul | ~11 000 Ft | Csak a B opcióhoz kell |
-| **[Alt]**| 1 db | **All-in-One Integrált Lapka** | **LilyGO T-SIM7600E-H ESP32-S3** vagy **T-A7670E ESP32-S3** | ~14 000 - 18 000 Ft | **Erősen ajánlott!** Egyben van az ESP32-S3, LTE, SIM foglalat |
-| **3** | 1 db | **Autóipari DC-DC Step-Down Konverter** | MP1584EN vagy LM2596 (In: 7–28V, Out: 5V 3A szinkron) | ~900 Ft | Alacsony üresjárati áramú (<2mA) típust válassz! |
-| **4** | 1 db | **Mini Biztosíték Adapter (Fuse Tap)** | Low-Profile Mini (vagy Mini) Fuse Tap + 2A biztosíték | ~800 Ft | A jármű biztosítéktáblájához való biztonságos csatlakozáshoz |
-| **5** | 1 db | **TVS Túlfeszültség Levezető Dióda** | SMAJ15A vagy SMBJ18A (Unidirectional TVS) | ~150 Ft | Védi a modult a generátor tranziensektől |
-| **6** | 1 db | **Schottky Védődióda** | 1N5819 vagy SS34 (3A / 40V) | ~100 Ft | Fordított polaritás elleni védelem |
-| **7** | 2 db | **Precíziós fémréteg ellenállások** | $R_1 = 100\ \text{k}\Omega\ (1\%)$ és $R_2 = 10\ \text{k}\Omega\ (1\%)$ | ~50 Ft | 12V feszültségmérés osztója (11:1) |
-| **8** | 1 db | **Kerámia szűrőkondenzátor** | $C_1 = 100\ \text{nF}$ (50V, X7R) | ~30 Ft | ADC zajszűrés a mérőponton |
-| **9** | 1 db | **4G LTE Flexibilis / Ragasztható Antenna** | FPC vagy botantenna SMA/IPEX csatlakozóval (LTE 700–2600MHz) | ~1 200 Ft | 3 dBi erősítésű ragasztható szélvédő/műanyag antenna |
-| **10**| 1 db | **2.4 GHz Wi-Fi Antenna** | IPEX/U.FL -> SMA vagy belső FPC antenna | ~600 Ft | Ha külső antennás ESP32-t használsz |
-| **11**| 1 db | **Műszerdoboz (Enclosure)** | ABS univerzális doboz (pl. 100x68x50mm) vagy 3D nyomtatott PETG ház | ~1 500 Ft | **NE PLA-ból nyomtasd!** Autóban nyáron 65°C is lehet! |
-| **12**| 1 db | **M2 / M2.5 Távtartók és csavarok** | Réz/Nylon távtartó készlet | ~500 Ft | Lapkák stabil rögzítéséhez a dobozban |
-| **13**| 1 db | **IoT / M2M SIM Kártya** | Telekom, Vodafone, Yettel vagy 1Komma5 / Things Mobile | ~500–1000 Ft/hó | Havi 50–100 MB adatforgalom bőségesen elég |
+| **1** | 1 db | **All-in-One Integrált Lapka** | **LilyGO T-A7670E R2 With GPS [Q334]** | ~14 000 Ft | **A kiválasztott hardver!** Tartalmazza az ESP32-t, LTE modemet, GPS vevőt, SIM foglalatot, 4G és GPS antennát! |
+| **2** | 1 db | **Tápellátás opció 1: Power Bank / LiPo** | 10.000 mAh Pass-Through Power Bank vagy 3.7V LiPo akku | ~4 500 - 8 000 Ft | **Ajánlott:** 100% függetlenség a kisakkutól, szivargyújtóról öntöltődő |
+| **[Alt 2]**| 1 db | **Tápellátás opció 2: Autó 12V bekötés** | MP1584EN DC-DC (5V 3A) + 2A Fuse Tap + Védelmi áramkör | ~2 500 Ft | Ha állandó 12V-os autóipari bekötést szeretnél |
+| **3** | 1 db | **Autós Szivargyújtós USB Töltőfej** | Baseus / Ugreen 12V -> USB-C 30W mini töltőfej | ~2 500 Ft | A csomagtartó szivargyújtójába dugva tölti a power bankot menet közben |
+| **4** | 1 db | **Nano-SIM Kártya** | Telekom, Yettel, Vodafone vagy 1Komma5 IoT SIM | ~500–1000 Ft/hó | Havi 50–100 MB adatforgalom bőven elég |
+| **5** | 1 db | **Műszerdoboz (Enclosure)** | ABS univerzális doboz vagy 3D nyomtatott PETG ház | ~1 500 Ft | **NE PLA-ból nyomtasd!** Autóban nyáron 65°C is lehet! |
 
 ---
 
@@ -123,58 +115,50 @@ GND (-)    o──────────────────────�
 
 ## 4. Hardver bekötési rajz és kapcsolás
 
-### 4.1. Moduláris bekötés (ESP32-S3 + SIM7600/A7670)
+### 4.1. LilyGO T-A7670E R2 Integrált Hardver
 
-```mermaid
-graph TD
-    subgraph PowerSystem ["Tápellátás & Védelem"]
-        FUSE["12V Fuse Tap (2A)"] --> DIODE["SS34 Dióda"]
-        DIODE --> DCDC["DC-DC Step-Down (5V 3A)"]
-        DIODE --> R1["R1: 100k Ohm"]
-        R1 --> ADC_NODE["ADC Mérőpont"]
-        ADC_NODE --> R2["R2: 10k Ohm"]
-        ADC_NODE --> C1["C1: 100nF Kondi"]
-        R2 --> GND["GND Közös Test"]
-        C1 --> GND
-        DCDC --> GND
-    end
+Mivel a kiválasztott **LilyGO T-A7670E R2** egy All-in-One lapka, **nem kell vezetékeket forrasztanod az ESP32 és a modem közé**, a NYÁK-on gyárilag össze vannak kötve az alábbi belső lábkiosztással:
 
-    subgraph ESP32 ["ESP32-S3 DevKit"]
-        V5["5V / VBUS"]
-        GND_ESP["GND"]
-        GPIO1["GPIO 1 (ADC1_CH0)"]
-        GPIO17["GPIO 17 (TX1)"]
-        GPIO18["GPIO 18 (RX1)"]
-        GPIO4["GPIO 4 (PWRKEY)"]
-        GPIO5["GPIO 5 (RESET)"]
-        GPIO6["GPIO 6 (DTR)"]
-        GPIO7["GPIO 7 (STATUS)"]
-    end
+| Belső Funkció | ESP32 GPIO | A7670E Modem Láb | Megjegyzés |
+|---|---|---|---|
+| **Modem TXD (ESP RX)** | `GPIO 26` | A7670E TXD | Hardveres UART1 vételi vonal |
+| **Modem RXD (ESP TX)** | `GPIO 27` | A7670E RXD | Hardveres UART1 adási vonal |
+| **Modem PWRKEY** | `GPIO 4` | PWRKEY | Bekapcsoló impulzus (1 mp HIGH) |
+| **Modem RESET** | `GPIO 5` | RESET | Hardveres újraindítás |
+| **Modem DTR (Sleep)** | `GPIO 25` | DTR | Alvó mód vezérlés (HIGH = alvás, LOW = ébrenlét) |
+| **Tápfeszültség engedélyezés**| `GPIO 12` | VDD_EXT / EN | A szoftver automatikusan HIGH-ra állítja a perifériák táplálásához |
+| **Akkumulátor ADC mérő** | `GPIO 35` | Li-ion VBat | Beépített feszültségosztó az akku figyeléséhez |
 
-    subgraph Modem ["LTE Modem (SIM7600 / A7670)"]
-        MOD_VCC["VCC (5V / VBAT)"]
-        MOD_GND["GND"]
-        MOD_RX["RXD"]
-        MOD_TX["TXD"]
-        MOD_PWR["PWRKEY"]
-        MOD_RST["RESET"]
-        MOD_DTR["DTR (Sleep)"]
-        MOD_STA["STATUS"]
-    end
+### 4.2. Külső Csatlakozók és Antennák:
+1. **LTE Antenna:** Csatlakoztasd a készletben lévő 4G LTE botantennát a kártya **`LTE` (vagy MAIN)** jelölésű SMA csatlakozójára.
+2. **GPS Antenna:** Csatlakoztasd a készletben lévő aktív GPS vevőantennát a kártya **`GPS`** jelölésű IPEX/SMA aljzatára. Az antenna mágneses vagy ragasztható felét a szélvédő/műanyag felület alá érdemes elhelyezni, felfelé nézve.
+3. **Nano-SIM kártya:** Helyezd be a PIN-kód nélküli Nano-SIM kártyát a foglalatba.
+4. **Tápellátás:**
+   - **Opció A (Ajánlott):** Power bank vagy 12V szivargyújtós USB töltő az **USB-C** portba.
+   - **Opció B:** 3.7V-os LiPo akkumulátor közvetlenül a lapka fehér **JST-PH 2.0mm** akkumulátorcsatlakozójára.
 
-    DCDC -->|5V| V5
-    DCDC -->|5V| MOD_VCC
-    GND --> GND_ESP
-    GND --> MOD_GND
+---
 
-    ADC_NODE --> GPIO1
-    GPIO17 --> MOD_RX
-    GPIO18 --> MOD_TX
-    GPIO4 --> MOD_PWR
-    GPIO5 --> MOD_RST
-    GPIO6 --> MOD_DTR
-    GPIO7 --> MOD_STA
-```
+## 4.3. GPS Nyomkövetés és Home Assistant Térkép Integráció
+
+A modul a beépített A7670E GNSS motornak köszönhetően folyamatosan méri az autó földrajzi koordinátáit, és automatikusan regisztrálja a Home Assistantban a **`device_tracker`** entitást:
+
+### Mit látsz a Home Assistantban?
+1. **Jármű pozíció a Térképen:**  
+   A Home Assistant beépített Térkép (Map) nézetében megjelenik az autó egyedi autóikonnal (`mdi:car-connected`).
+2. **Zóna-érzékelés:**  
+   Automatikusan érzékeli, ha az autó belép vagy kilép a beállított zónákból:
+   - `Otthon` (Home)
+   - `Munkahely` (Work)
+   - `Töltőállomás` (Charging Zone)
+3. **Valós idejű telemetria szenzorok:**
+   - `sensor.phev_location_latitude` (Szélesség)
+   - `sensor.phev_location_longitude` (Hosszúság)
+   - `sensor.phev_location_speed` (Sebesség km/h-ban)
+   - `sensor.phev_location_satellites` (Látott GPS műholdak száma)
+
+### Példa automatizmus Home Assistantban:
+> **Példa:** *"Ha a gépkocsi elhagyja az 'Otthon' zónát és az ajtók nincsenek bezárva, küldjön figyelmeztető push értesítést a telefonra!"* vagy *"Ha hazaérkezel télen, automatikusan kapcsolja fel a garázsvilágítást."*
 
 ---
 
