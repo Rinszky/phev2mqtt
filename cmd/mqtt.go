@@ -57,14 +57,16 @@ MQTT can control climate, timers, lights, clock sync, and vehicle settings.
 
 // climate tracks complete immediate Pre-AC state across registers 0x10, 0x1a, and 0x1c.
 type climate struct {
-	state            *protocol.PreACState
-	mode             *string
-	operating        bool
-	delayPending     bool
-	hasOper          bool // register 0x1a received at least once
-	selectedDuration int // 10, 20, 30
-	selectedDelay    int // 0, 5, 10
-	stopTime         string
+	state              *protocol.PreACState
+	mode               *string
+	operating          bool
+	delayPending       bool
+	hasOper            bool // register 0x1a received at least once
+	selectedDuration   int  // 10, 20, 30
+	selectedDelay      int  // 0, 5, 10
+	stopTime           string
+	delayStartTime     time.Time
+	operatingStartTime time.Time
 }
 
 func newClimateTracker() *climate {
@@ -86,12 +88,32 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 	st := reg.State
 	c.state = &st
 	c.stopTime = reg.TargetTimeString()
+	isOp := c.operating || st == protocol.PreACOn
+	if isOp && c.operatingStartTime.IsZero() {
+		c.operatingStartTime = time.Now()
+	} else if !isOp && !c.delayPending {
+		c.operatingStartTime = time.Time{}
+		c.delayStartTime = time.Time{}
+	}
 }
 
 func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 	c.hasOper = true
 	c.operating = reg.Operating
+	if reg.DelayPending && !c.delayPending {
+		c.delayStartTime = time.Now()
+	} else if !reg.DelayPending {
+		c.delayStartTime = time.Time{}
+	}
 	c.delayPending = reg.DelayPending
+
+	isOp := reg.Operating || (c.state != nil && *c.state == protocol.PreACOn)
+	if isOp && c.operatingStartTime.IsZero() {
+		c.operatingStartTime = time.Now()
+	} else if !isOp && !c.delayPending {
+		c.operatingStartTime = time.Time{}
+	}
+
 	if reg.Duration == 10 || reg.Duration == 20 || reg.Duration == 30 {
 		c.selectedDuration = reg.Duration
 	}
@@ -100,18 +122,82 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 	}
 }
 
+// remainingAndCompletion returns remaining minutes and RFC3339 completion timestamp.
+func (c *climate) remainingAndCompletion(now time.Time) (int, string) {
+	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
+	if !isOperating && !c.delayPending {
+		return 0, "none"
+	}
+
+	// 1. Actively operating and target stop time known (from ECU 0x10, e.g. "07:40")
+	if isOperating && c.stopTime != "" && c.stopTime != "--:--" && len(c.stopTime) == 5 {
+		var hh, mm int
+		if n, err := fmt.Sscanf(c.stopTime, "%d:%d", &hh, &mm); err == nil && n == 2 && hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 {
+			target := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, now.Location())
+			if target.Before(now.Add(-6 * time.Hour)) {
+				target = target.Add(24 * time.Hour)
+			}
+			diff := target.Sub(now)
+			remMin := 0
+			if diff > 0 {
+				remMin = int((diff + 59*time.Second) / time.Minute)
+			}
+			return remMin, target.Truncate(time.Minute).Format(time.RFC3339)
+		}
+	}
+
+	// 2. Delayed start pending
+	if c.delayPending {
+		totalMin := c.selectedDelay + c.selectedDuration
+		if totalMin <= 0 {
+			totalMin = 10
+		}
+		if !c.delayStartTime.IsZero() {
+			elapsed := int(now.Sub(c.delayStartTime).Minutes())
+			remMin := totalMin - elapsed
+			if remMin < 0 {
+				remMin = 0
+			}
+			comp := c.delayStartTime.Add(time.Duration(totalMin) * time.Minute).Truncate(time.Minute)
+			return remMin, comp.Format(time.RFC3339)
+		}
+		comp := now.Add(time.Duration(totalMin) * time.Minute).Truncate(time.Minute)
+		return totalMin, comp.Format(time.RFC3339)
+	}
+
+	// 3. Operating fallback (e.g. without valid stopTime from ECU)
+	dur := c.selectedDuration
+	if dur <= 0 {
+		dur = 10
+	}
+	if !c.operatingStartTime.IsZero() {
+		elapsed := int(now.Sub(c.operatingStartTime).Minutes())
+		remMin := dur - elapsed
+		if remMin < 0 {
+			remMin = 0
+		}
+		comp := c.operatingStartTime.Add(time.Duration(dur) * time.Minute).Truncate(time.Minute)
+		return remMin, comp.Format(time.RFC3339)
+	}
+	comp := now.Add(time.Duration(dur) * time.Minute).Truncate(time.Minute)
+	return dur, comp.Format(time.RFC3339)
+}
+
 func (c *climate) mqttStates() map[string]string {
 	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
+	remMin, compTime := c.remainingAndCompletion(time.Now())
 	m := map[string]string{
-		"/climate/state":      "off",
-		"/climate/mode":       "off",
-		"/climate/cool":       "off",
-		"/climate/heat":       "off",
-		"/climate/windscreen": "off",
-		"/climate/operating":  boolOnOff[isOperating],
-		"/climate/duration":   strconv.Itoa(c.selectedDuration),
-		"/climate/delay":      strconv.Itoa(c.selectedDelay),
-		"/climate/stop_time":  c.stopTime,
+		"/climate/state":           "off",
+		"/climate/mode":            "off",
+		"/climate/cool":            "off",
+		"/climate/heat":            "off",
+		"/climate/windscreen":      "off",
+		"/climate/operating":       boolOnOff[isOperating],
+		"/climate/duration":        strconv.Itoa(c.selectedDuration),
+		"/climate/delay":           strconv.Itoa(c.selectedDelay),
+		"/climate/stop_time":       c.stopTime,
+		"/climate/remaining":       strconv.Itoa(remMin),
+		"/climate/completion_time": compTime,
 	}
 	if c.state == nil {
 		return m
@@ -123,6 +209,8 @@ func (c *climate) mqttStates() map[string]string {
 	// means preheating/AC is actively running!
 	if c.hasOper && !c.operating && !c.delayPending && *c.state == protocol.PreACStarting {
 		m["/climate/stop_time"] = "--:--"
+		m["/climate/remaining"] = "0"
+		m["/climate/completion_time"] = "none"
 		return m
 	}
 	activeMode := "heat"
@@ -2004,6 +2092,30 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 				"icon":        "mdi:clock-end",
 				"state_topic": "~/climate/stop_time",
 				"avty_t":      sensAvty,
+			},
+		},
+		{
+			component: "sensor",
+			suffix:    "climate_remaining",
+			fields: map[string]interface{}{
+				"name":                name + " Climate Remaining",
+				"icon":                "mdi:timer-sand",
+				"state_topic":         "~/climate/remaining",
+				"unit_of_measurement": "min",
+				"device_class":        "duration",
+				"avty_t":              sensAvty,
+			},
+		},
+		{
+			component: "sensor",
+			suffix:    "climate_completion_time",
+			fields: map[string]interface{}{
+				"name":           name + " Estimated Climate Completion",
+				"icon":           "mdi:clock-end",
+				"device_class":   "timestamp",
+				"state_topic":    "~/climate/completion_time",
+				"value_template": "{{ value if value not in ['none', ''] else none }}",
+				"avty_t":         sensAvty,
 			},
 		},
 		{
