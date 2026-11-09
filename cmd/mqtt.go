@@ -64,16 +64,25 @@ type climate struct {
 	hasOper            bool // register 0x1a received at least once
 	selectedDuration   int  // 10, 20, 30
 	selectedDelay      int  // 0, 5, 10
+	hasStartTime       bool
+	startHour          int
+	startMinute        int
 	stopTime           string
 	delayStartTime     time.Time
 	operatingStartTime time.Time
+	schedule           *protocol.ClimateSchedule
 }
 
-func newClimateTracker() *climate {
+func newClimateTracker(sched ...*protocol.ClimateSchedule) *climate {
+	var s *protocol.ClimateSchedule
+	if len(sched) > 0 {
+		s = sched[0]
+	}
 	return &climate{
 		selectedDuration: 10,
 		selectedDelay:    0,
 		stopTime:         "--:--",
+		schedule:         s,
 	}
 }
 
@@ -87,7 +96,10 @@ func (c *climate) setMode(m string, dur uint8) {
 func (c *climate) setState(reg *protocol.RegisterPreACState) {
 	st := reg.State
 	c.state = &st
-	c.stopTime = reg.TargetTimeString()
+	c.hasStartTime = reg.HasTargetTime
+	c.startHour = reg.TargetHour
+	c.startMinute = reg.TargetMinute
+
 	isOp := c.operating || st == protocol.PreACOn
 	if isOp && c.operatingStartTime.IsZero() {
 		c.operatingStartTime = time.Now()
@@ -95,6 +107,7 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 		c.operatingStartTime = time.Time{}
 		c.delayStartTime = time.Time{}
 	}
+	c.updateTiming(time.Now())
 }
 
 func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
@@ -120,6 +133,87 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 	if reg.Delay == 0 || reg.Delay == 5 || reg.Delay == 10 {
 		c.selectedDelay = reg.Delay
 	}
+	c.updateTiming(time.Now())
+}
+
+// activeDuration returns the duration in minutes for the active climate session.
+func (c *climate) activeDuration() int {
+	if c.operating {
+		if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
+			return c.selectedDuration
+		}
+	}
+	if c.schedule != nil {
+		if c.hasStartTime {
+			for _, timer := range c.schedule.Timers {
+				if timer.Enabled && timer.Hour == c.startHour && (timer.Minute == c.startMinute || timer.Minute/10 == c.startMinute/10) {
+					if timer.Duration == 10 || timer.Duration == 20 || timer.Duration == 30 {
+						return timer.Duration
+					}
+				}
+			}
+		}
+		var enabledTimers []protocol.ClimateTimerSlot
+		for _, timer := range c.schedule.Timers {
+			if timer.Enabled {
+				enabledTimers = append(enabledTimers, timer)
+			}
+		}
+		if len(enabledTimers) == 1 {
+			if enabledTimers[0].Duration == 10 || enabledTimers[0].Duration == 20 || enabledTimers[0].Duration == 30 {
+				return enabledTimers[0].Duration
+			}
+		}
+	}
+	if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
+		return c.selectedDuration
+	}
+	return 20
+}
+
+func (c *climate) updateTiming(now time.Time) {
+	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
+	if !isOperating && !c.delayPending {
+		c.stopTime = "--:--"
+		return
+	}
+
+	dur := c.activeDuration()
+
+	if c.delayPending {
+		totalMin := c.selectedDelay + dur
+		refTime := now
+		if !c.delayStartTime.IsZero() {
+			refTime = c.delayStartTime
+		}
+		targetStop := refTime.Add(time.Duration(totalMin) * time.Minute)
+		c.stopTime = targetStop.Format("15:04")
+		return
+	}
+
+	if isOperating {
+		if c.hasStartTime {
+			start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
+			if start.After(now.Add(6 * time.Hour)) {
+				start = start.Add(-24 * time.Hour)
+			} else if start.Before(now.Add(-18 * time.Hour)) {
+				start = start.Add(24 * time.Hour)
+			}
+			targetStop := start.Add(time.Duration(dur) * time.Minute)
+			c.stopTime = targetStop.Format("15:04")
+			return
+		}
+		if !c.operatingStartTime.IsZero() {
+			targetStop := c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
+			c.stopTime = targetStop.Format("15:04")
+			return
+		}
+		targetStop := now.Add(time.Duration(dur) * time.Minute)
+		c.stopTime = targetStop.Format("15:04")
+		return
+	}
+
+	c.stopTime = "--:--"
 }
 
 // remainingAndCompletion returns remaining minutes and RFC3339 completion timestamp.
@@ -129,63 +223,51 @@ func (c *climate) remainingAndCompletion(now time.Time) (int, string) {
 		return 0, "none"
 	}
 
-	// 1. Actively operating and target stop time known (from ECU 0x10, e.g. "07:40")
-	if isOperating && c.stopTime != "" && c.stopTime != "--:--" && len(c.stopTime) == 5 {
-		var hh, mm int
-		if n, err := fmt.Sscanf(c.stopTime, "%d:%d", &hh, &mm); err == nil && n == 2 && hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 {
-			target := time.Date(now.Year(), now.Month(), now.Day(), hh, mm, 0, 0, now.Location())
-			if target.Before(now.Add(-6 * time.Hour)) {
-				target = target.Add(24 * time.Hour)
-			}
-			diff := target.Sub(now)
-			remMin := 0
-			if diff > 0 {
-				remMin = int((diff + 59*time.Second) / time.Minute)
-			}
-			return remMin, target.Truncate(time.Minute).Format(time.RFC3339)
-		}
-	}
+	dur := c.activeDuration()
+	var targetStop time.Time
 
-	// 2. Delayed start pending
 	if c.delayPending {
-		totalMin := c.selectedDelay + c.selectedDuration
-		if totalMin <= 0 {
-			totalMin = 10
-		}
+		totalMin := c.selectedDelay + dur
+		refTime := now
 		if !c.delayStartTime.IsZero() {
-			elapsed := int(now.Sub(c.delayStartTime).Minutes())
-			remMin := totalMin - elapsed
-			if remMin < 0 {
-				remMin = 0
-			}
-			comp := c.delayStartTime.Add(time.Duration(totalMin) * time.Minute).Truncate(time.Minute)
-			return remMin, comp.Format(time.RFC3339)
+			refTime = c.delayStartTime
 		}
-		comp := now.Add(time.Duration(totalMin) * time.Minute).Truncate(time.Minute)
-		return totalMin, comp.Format(time.RFC3339)
+		targetStop = refTime.Add(time.Duration(totalMin) * time.Minute)
+	} else if isOperating {
+		if c.hasStartTime {
+			start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
+			if start.After(now.Add(6 * time.Hour)) {
+				start = start.Add(-24 * time.Hour)
+			} else if start.Before(now.Add(-18 * time.Hour)) {
+				start = start.Add(24 * time.Hour)
+			}
+			targetStop = start.Add(time.Duration(dur) * time.Minute)
+		} else if !c.operatingStartTime.IsZero() {
+			targetStop = c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
+		} else {
+			targetStop = now.Add(time.Duration(dur) * time.Minute)
+		}
 	}
 
-	// 3. Operating fallback (e.g. without valid stopTime from ECU)
-	dur := c.selectedDuration
-	if dur <= 0 {
-		dur = 10
+	diff := targetStop.Sub(now)
+	remMin := 0
+	if diff > 0 {
+		remMin = int((diff + 59*time.Second) / time.Minute)
 	}
-	if !c.operatingStartTime.IsZero() {
-		elapsed := int(now.Sub(c.operatingStartTime).Minutes())
-		remMin := dur - elapsed
-		if remMin < 0 {
-			remMin = 0
-		}
-		comp := c.operatingStartTime.Add(time.Duration(dur) * time.Minute).Truncate(time.Minute)
-		return remMin, comp.Format(time.RFC3339)
-	}
-	comp := now.Add(time.Duration(dur) * time.Minute).Truncate(time.Minute)
-	return dur, comp.Format(time.RFC3339)
+	return remMin, targetStop.Truncate(time.Minute).Format(time.RFC3339)
 }
 
 func (c *climate) mqttStates() map[string]string {
 	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
-	remMin, compTime := c.remainingAndCompletion(time.Now())
+	now := time.Now()
+	c.updateTiming(now)
+	remMin, compTime := c.remainingAndCompletion(now)
+
+	startTimeStr := "--:--"
+	if c.hasStartTime {
+		startTimeStr = fmt.Sprintf("%02d:%02d", c.startHour, c.startMinute)
+	}
+
 	m := map[string]string{
 		"/climate/state":           "off",
 		"/climate/mode":            "off",
@@ -195,6 +277,7 @@ func (c *climate) mqttStates() map[string]string {
 		"/climate/operating":       boolOnOff[isOperating],
 		"/climate/duration":        strconv.Itoa(c.selectedDuration),
 		"/climate/delay":           strconv.Itoa(c.selectedDelay),
+		"/climate/start_time":      startTimeStr,
 		"/climate/stop_time":       c.stopTime,
 		"/climate/remaining":       strconv.Itoa(remMin),
 		"/climate/completion_time": compTime,
@@ -337,15 +420,16 @@ type mqttClient struct {
 }
 
 func newMqttClient() *mqttClient {
-	return &mqttClient{
+	mc := &mqttClient{
 		mqttData:           make(map[string]string),
 		discoveredSettings: make(map[string]bool),
-		climate:            newClimateTracker(),
 		climateSchedule:    protocol.NewDefaultClimateSchedule(),
 		chargeSchedule:     protocol.NewDefaultChargeSchedule(),
 		settings:           &protocol.Settings{},
 		enabled:            true,
 	}
+	mc.climate = newClimateTracker(&mc.climateSchedule)
+	return mc
 }
 
 func (m *mqttClient) topic(sub string) string {
@@ -2081,6 +2165,16 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 				"name":        name + " Climate Status",
 				"icon":        "mdi:hvac",
 				"state_topic": "~/climate/state",
+				"avty_t":      sensAvty,
+			},
+		},
+		{
+			component: "sensor",
+			suffix:    "climate_start_time",
+			fields: map[string]interface{}{
+				"name":        name + " Climate Start Time",
+				"icon":        "mdi:clock-start",
+				"state_topic": "~/climate/start_time",
 				"avty_t":      sensAvty,
 			},
 		},
