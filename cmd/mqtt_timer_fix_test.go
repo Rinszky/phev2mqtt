@@ -8,17 +8,31 @@ import (
 )
 
 func TestClimateTimerArmedIsNotImmediateAC(t *testing.T) {
+	// Case 1: Climate timer is armed in standby (waiting for scheduled time).
+	// RegisterPreACState reports PreACStarting, RegisterACOperStatus has Operating=false.
 	c := newClimateTracker()
-	st := protocol.PreACOn
-	c.state = &st
+	stStandby := protocol.PreACStarting
+	c.state = &stStandby
 	c.setOper(&protocol.RegisterACOperStatus{Operating: false, DelayPending: false})
 	s := c.mqttStates()
-	if s["/climate/heat"] != "off" || s["/climate/mode"] != "off" || s["/climate/state"] != "off" {
-		t.Errorf("armed timer must not look like running AC: %v", s)
+	if s["/climate/heat"] != "off" || s["/climate/mode"] != "off" || s["/climate/state"] != "off" || s["/climate/operating"] != "off" {
+		t.Errorf("armed timer in standby must report off: %v", s)
 	}
+
+	// Case 2: Scheduled climate timer triggers preheating at programmed time (e.g. 7:20-7:40).
+	// RegisterPreACState reports PreACOn, while RegisterACOperStatus Operating may be false.
+	stOn := protocol.PreACOn
+	c.state = &stOn
+	sRunning := c.mqttStates()
+	if sRunning["/climate/heat"] != "on" || sRunning["/climate/mode"] != "heat" || sRunning["/climate/state"] != "heat" || sRunning["/climate/operating"] != "on" {
+		t.Errorf("scheduled preheating active must report heat on and operating on: %v", sRunning)
+	}
+
+	// Case 3: Manual immediate AC operating.
 	c.setOper(&protocol.RegisterACOperStatus{Operating: true})
-	if c.mqttStates()["/climate/heat"] != "on" {
-		t.Errorf("operating AC should be heat on")
+	sManual := c.mqttStates()
+	if sManual["/climate/heat"] != "on" || sManual["/climate/operating"] != "on" {
+		t.Errorf("manual operating AC should be heat on and operating on: %v", sManual)
 	}
 }
 

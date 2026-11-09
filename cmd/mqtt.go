@@ -101,13 +101,14 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 }
 
 func (c *climate) mqttStates() map[string]string {
+	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
 	m := map[string]string{
 		"/climate/state":      "off",
 		"/climate/mode":       "off",
 		"/climate/cool":       "off",
 		"/climate/heat":       "off",
 		"/climate/windscreen": "off",
-		"/climate/operating":  boolOnOff[c.operating],
+		"/climate/operating":  boolOnOff[isOperating],
 		"/climate/duration":   strconv.Itoa(c.selectedDuration),
 		"/climate/delay":      strconv.Itoa(c.selectedDelay),
 		"/climate/stop_time":  c.stopTime,
@@ -115,12 +116,12 @@ func (c *climate) mqttStates() map[string]string {
 	if c.state == nil {
 		return m
 	}
-	// When a climate timer is armed the ECU reports PreACStarting/PreACOn in
-	// 0x10 (with the scheduled time), but 0x1a reports the AC as neither
-	// operating nor delayed. The official app treats that as "timer armed",
-	// not as an immediate AC session, so we do the same.
-	if c.hasOper && !c.operating && !c.delayPending &&
-		(*c.state == protocol.PreACStarting || *c.state == protocol.PreACOn) {
+	// When a climate timer is armed in standby, the ECU reports PreACStarting in
+	// 0x10 (with the scheduled start time), while 0x1a reports the AC as neither
+	// operating nor delayed. In standby, the AC is not yet operating.
+	// But when the scheduled timer fires, the ECU reports PreACOn in 0x10, which
+	// means preheating/AC is actively running!
+	if c.hasOper && !c.operating && !c.delayPending && *c.state == protocol.PreACStarting {
 		m["/climate/stop_time"] = "--:--"
 		return m
 	}
