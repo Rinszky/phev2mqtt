@@ -130,3 +130,29 @@ func TestChargeCompletionTime(t *testing.T) {
 		t.Errorf("expected none")
 	}
 }
+
+func TestScaleBatteryLevel(t *testing.T) {
+	tests := []struct {
+		raw    int
+		maxSoc int
+		want   int
+	}{
+		{raw: 0, maxSoc: 94, want: 0},
+		{raw: 47, maxSoc: 94, want: 50},
+		{raw: 88, maxSoc: 94, want: 94},
+		{raw: 89, maxSoc: 94, want: 95},
+		{raw: 90, maxSoc: 94, want: 96},
+		{raw: 93, maxSoc: 94, want: 99},
+		{raw: 94, maxSoc: 94, want: 100},
+		{raw: 95, maxSoc: 94, want: 100},
+		// Disabled scaling (maxSoc = 100)
+		{raw: 94, maxSoc: 100, want: 94},
+		{raw: 100, maxSoc: 100, want: 100},
+	}
+	for _, tc := range tests {
+		got := scaleBatteryLevel(tc.raw, tc.maxSoc)
+		if got != tc.want {
+			t.Errorf("scaleBatteryLevel(%d, %d) = %d; want %d", tc.raw, tc.maxSoc, got, tc.want)
+		}
+	}
+}

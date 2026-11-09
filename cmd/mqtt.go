@@ -349,6 +349,25 @@ func chargeCompletionTime(charging bool, remainingMin int, now time.Time) string
 	return now.Add(time.Duration(remainingMin) * time.Minute).Truncate(time.Minute).Format(time.RFC3339)
 }
 
+// scaleBatteryLevel scales the raw BMU battery SoC (which tops out at maxSoc, typically 94%)
+// smoothly and linearly to customer display SoC (0..100%).
+func scaleBatteryLevel(rawLevel, maxSoc int) int {
+	if rawLevel <= 0 {
+		return 0
+	}
+	if maxSoc <= 0 || maxSoc >= 100 {
+		if rawLevel > 100 {
+			return 100
+		}
+		return rawLevel
+	}
+	scaled := (rawLevel*100 + maxSoc/2) / maxSoc
+	if scaled > 100 {
+		scaled = 100
+	}
+	return scaled
+}
+
 var lastWifiRestart time.Time
 
 func restartWifi() error {
@@ -415,6 +434,8 @@ type mqttClient struct {
 	my14Reg22       []byte
 	my14Reg19       []byte
 
+	batteryMaxSoc int
+
 	enabled bool
 }
 
@@ -425,6 +446,7 @@ func newMqttClient() *mqttClient {
 		climateSchedule:    protocol.NewDefaultClimateSchedule(),
 		chargeSchedule:     protocol.NewDefaultChargeSchedule(),
 		settings:           &protocol.Settings{},
+		batteryMaxSoc:      94,
 		enabled:            true,
 	}
 	mc.climate = newClimateTracker(&mc.climateSchedule)
@@ -481,6 +503,10 @@ func (m *mqttClient) Run(cmd *cobra.Command, args []string) error {
 	m.haDiscoveryPrefix = strings.TrimRight(viper.GetString("ha_discovery_prefix"), "/")
 	m.haKeepSensorsOnline = viper.GetBool("ha_keep_sensors_available")
 	m.updateInterval = viper.GetDuration("update_interval")
+	m.batteryMaxSoc = viper.GetInt("battery_max_soc")
+	if m.batteryMaxSoc <= 0 {
+		m.batteryMaxSoc = 94
+	}
 	wifiRestartTime := viper.GetDuration("wifi_restart_time")
 	restartCommand := viper.GetString("wifi_restart_command")
 
@@ -1652,14 +1678,31 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 
 	case *protocol.RegisterBatteryLevel:
 		if reg.Valid {
-			m.publish("/battery/level", strconv.Itoa(reg.Level))
+			m.mu.Lock()
+			maxSoc := m.batteryMaxSoc
+			if maxSoc <= 0 {
+				maxSoc = 94
+			}
+			if reg.Level > maxSoc && reg.Level <= 100 {
+				m.batteryMaxSoc = reg.Level
+				maxSoc = reg.Level
+			}
+			m.mu.Unlock()
+
+			scaled := scaleBatteryLevel(reg.Level, maxSoc)
+			m.publish("/battery/level", strconv.Itoa(scaled))
+			m.publish("/battery/raw_level", strconv.Itoa(reg.Level))
 		} else {
 			m.mu.RLock()
 			cache := m.mqttData["/battery/level"]
+			rawCache := m.mqttData["/battery/raw_level"]
 			m.mu.RUnlock()
 			if cache != "" {
 				m.publish("/battery/level", cache)
 				log.Debugf("Ignoring invalid battery level reading %v, keeping %v", reg.Level, cache)
+			}
+			if rawCache != "" {
+				m.publish("/battery/raw_level", rawCache)
 			}
 		}
 		m.publish("/lights/parking", boolOnOff[reg.ParkingLights])
@@ -1940,6 +1983,20 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 				"device_class":        "battery",
 				"name":                name + " Battery",
 				"state_topic":         "~/battery/level",
+				"state_class":         "measurement",
+				"unit_of_measurement": "%",
+				"avty_t":              sensAvty,
+			},
+		},
+		{
+			component: "sensor",
+			suffix:    "battery_raw_level",
+			fields: map[string]interface{}{
+				"device_class":        "battery",
+				"entity_category":     "diagnostic",
+				"name":                name + " Battery (Raw BMU)",
+				"icon":                "mdi:battery-high",
+				"state_topic":         "~/battery/raw_level",
 				"state_class":         "measurement",
 				"unit_of_measurement": "%",
 				"avty_t":              sensAvty,
@@ -2699,6 +2756,7 @@ func init() {
 	mqttCmd.Flags().Duration("wifi_restart_time", 0, "Attempt to restart Wifi if no connection for this long")
 	mqttCmd.Flags().Duration("wifi_restart_retry_time", 2*time.Minute, "Interval to attempt Wifi restart")
 	mqttCmd.Flags().String("wifi_restart_command", defaultWifiRestartCmd, "Command to restart Wifi connection to Phev")
+	mqttCmd.Flags().Int("battery_max_soc", 94, "Maximum raw battery SoC (in %) mapped to 100% display SoC (default 94; set to 100 to disable scaling)")
 
 	viper.BindPFlag("mqtt_server", mqttCmd.Flags().Lookup("mqtt_server"))
 	viper.BindPFlag("mqtt_username", mqttCmd.Flags().Lookup("mqtt_username"))
@@ -2711,6 +2769,7 @@ func init() {
 	viper.BindPFlag("ha_discovery_prefix", mqttCmd.Flags().Lookup("ha_discovery_prefix"))
 	viper.BindPFlag("ha_keep_sensors_available", mqttCmd.Flags().Lookup("ha_keep_sensors_available"))
 	viper.BindPFlag("update_interval", mqttCmd.Flags().Lookup("update_interval"))
+	viper.BindPFlag("battery_max_soc", mqttCmd.Flags().Lookup("battery_max_soc"))
 	viper.BindPFlag("wifi_restart_time", mqttCmd.Flags().Lookup("wifi_restart_time"))
 	viper.BindPFlag("wifi_restart_retry_time", mqttCmd.Flags().Lookup("wifi_restart_retry_time"))
 	viper.BindPFlag("wifi_restart_command", mqttCmd.Flags().Lookup("wifi_restart_command"))

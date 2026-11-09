@@ -17,6 +17,7 @@
     "ha_discovery": true,
     "ha_keep_sensors_available": false,
     "auto_sync_time": false,
+    "battery_max_soc": 94,
     "update_interval": "5m",
     "verbosity": "info",
     "debug": false
@@ -30,6 +31,7 @@
     "ha_discovery": "bool?",
     "ha_keep_sensors_available": "bool?",
     "auto_sync_time": "bool?",
+    "battery_max_soc": "int?",
     "update_interval": "str?",
     "verbosity": "list(trace|debug|info|warn|error)?",
     "debug": "bool?"

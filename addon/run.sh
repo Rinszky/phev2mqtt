@@ -72,6 +72,10 @@ fi
 if bashio::config.true 'auto_sync_time'; then
     ARGS+=("--auto_sync_time=true")
 fi
+BATTERY_MAX_SOC="$(bashio::config 'battery_max_soc')"
+if [[ -n "${BATTERY_MAX_SOC}" && "${BATTERY_MAX_SOC}" != "null" ]]; then
+    ARGS+=("--battery_max_soc" "${BATTERY_MAX_SOC}")
+fi
 
 bashio::log.info "Starting phev2mqtt (car=${CAR_ADDRESS}, broker=${MQTT_SERVER}, prefix=${TOPIC_PREFIX})"
 exec /opt/phev2mqtt "${ARGS[@]}"
