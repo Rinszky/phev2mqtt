@@ -97,6 +97,28 @@ func TestClimateRemainingAndCompletion(t *testing.T) {
 	if rem != 25 || comp != "2026-11-09T07:50:00Z" {
 		t.Errorf("delayed expected rem=25 comp=2026-11-09T07:50:00Z, got rem=%d comp=%s", rem, comp)
 	}
+
+	// 4. Manual AC (no target time from 0x10): duration 20 min, countdown decreases over time!
+	c3 := newClimateTracker()
+	c3.selectedDuration = 20
+	c3.operating = true
+	c3.operatingStartTime = now
+	rem0, _ := c3.remainingAndCompletion(now)
+	if rem0 != 20 {
+		t.Errorf("manual at T0 expected 20, got %d", rem0)
+	}
+	rem5, _ := c3.remainingAndCompletion(now.Add(5 * time.Minute))
+	if rem5 != 15 {
+		t.Errorf("manual at T+5m expected 15, got %d", rem5)
+	}
+	rem19, _ := c3.remainingAndCompletion(now.Add(19 * time.Minute))
+	if rem19 != 1 {
+		t.Errorf("manual at T+19m expected 1, got %d", rem19)
+	}
+	rem20, _ := c3.remainingAndCompletion(now.Add(20 * time.Minute))
+	if rem20 != 0 {
+		t.Errorf("manual at T+20m expected 0, got %d", rem20)
+	}
 }
 
 func TestChargeCompletionTime(t *testing.T) {

@@ -203,12 +203,10 @@ func (c *climate) updateTiming(now time.Time) {
 			c.stopTime = targetStop.Format("15:04")
 			return
 		}
-		if !c.operatingStartTime.IsZero() {
-			targetStop := c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
-			c.stopTime = targetStop.Format("15:04")
-			return
+		if c.operatingStartTime.IsZero() {
+			c.operatingStartTime = now
 		}
-		targetStop := now.Add(time.Duration(dur) * time.Minute)
+		targetStop := c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
 		c.stopTime = targetStop.Format("15:04")
 		return
 	}
@@ -242,10 +240,11 @@ func (c *climate) remainingAndCompletion(now time.Time) (int, string) {
 				start = start.Add(24 * time.Hour)
 			}
 			targetStop = start.Add(time.Duration(dur) * time.Minute)
-		} else if !c.operatingStartTime.IsZero() {
-			targetStop = c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
 		} else {
-			targetStop = now.Add(time.Duration(dur) * time.Minute)
+			if c.operatingStartTime.IsZero() {
+				c.operatingStartTime = now
+			}
+			targetStop = c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
 		}
 	}
 
@@ -1309,8 +1308,25 @@ func (m *mqttClient) handlePhev() error {
 		defer updaterTicker.Stop()
 	}
 
+	climateTicker := time.NewTicker(30 * time.Second)
+	defer climateTicker.Stop()
+
 	for {
 		select {
+		case <-climateTicker.C:
+			m.mu.Lock()
+			isOp := m.climate.operating || (m.climate.state != nil && *m.climate.state == protocol.PreACOn)
+			isDel := m.climate.delayPending
+			var states map[string]string
+			if isOp || isDel {
+				states = m.climate.mqttStates()
+			}
+			m.mu.Unlock()
+			if len(states) > 0 {
+				for t, p := range states {
+					m.publish(t, p)
+				}
+			}
 		case <-updaterC:
 			if atomic.CompareAndSwapInt32(&m.pollInFlight, 0, 1) {
 				go func(cl *client.Client) {
