@@ -368,6 +368,60 @@ func scaleBatteryLevel(rawLevel, maxSoc int) int {
 	return scaled
 }
 
+// processBatteryLevel applies auto-scaling and filters transient sensor glitches.
+// Returns (scaledStr, rawStr, isGlitch). When isGlitch is true, the returned strings
+// are the cached valid levels (if available) so the transient drop is not published.
+func (m *mqttClient) processBatteryLevel(reg *protocol.RegisterBatteryLevel) (scaledStr string, rawStr string, isGlitch bool) {
+	if reg == nil || !reg.Valid {
+		m.mu.RLock()
+		cache := m.mqttData["/battery/level"]
+		rawCache := m.mqttData["/battery/raw_level"]
+		m.mu.RUnlock()
+		return cache, rawCache, true
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	maxSoc := m.batteryMaxSoc
+	if maxSoc <= 0 {
+		maxSoc = 94
+	}
+	if reg.Level > maxSoc && reg.Level <= 100 {
+		m.batteryMaxSoc = reg.Level
+		maxSoc = reg.Level
+	}
+
+	// Glitch filter:
+	// The Outlander WiFi ECU periodically sends a transient uninitialized frame
+	// (often Level=5, the low-SOC limp threshold, or Level=0) during wake, poll requests,
+	// or before the BMU link updates. A physical traction battery cannot instantaneously drop
+	// by >25% or drop from >15% to <=5% in a single step while parked.
+	lastRaw := m.lastBatteryRaw
+	glitch := false
+	if lastRaw > 15 && reg.Level <= 5 {
+		glitch = true
+	} else if lastRaw > 0 && (lastRaw-reg.Level) > 25 {
+		glitch = true
+	} else if lastRaw == 0 && reg.Level <= 5 {
+		glitch = true
+	}
+
+	if glitch && m.batteryGlitchCount < 2 {
+		m.batteryGlitchCount++
+		log.Debugf("Filtering transient battery level glitch: got %d%% (last valid raw was %d%%, count %d)", reg.Level, lastRaw, m.batteryGlitchCount)
+		cache := m.mqttData["/battery/level"]
+		rawCache := m.mqttData["/battery/raw_level"]
+		return cache, rawCache, true
+	}
+
+	m.batteryGlitchCount = 0
+	m.lastBatteryRaw = reg.Level
+
+	scaled := scaleBatteryLevel(reg.Level, maxSoc)
+	return strconv.Itoa(scaled), strconv.Itoa(reg.Level), false
+}
+
 var lastWifiRestart time.Time
 
 func restartWifi() error {
@@ -434,7 +488,9 @@ type mqttClient struct {
 	my14Reg22       []byte
 	my14Reg19       []byte
 
-	batteryMaxSoc int
+	batteryMaxSoc      int
+	lastBatteryRaw     int
+	batteryGlitchCount int
 
 	enabled bool
 }
@@ -475,6 +531,7 @@ func (m *mqttClient) clearPhevIfMatch(cl *client.Client) {
 	if m.phev == cl {
 		m.phev = nil
 		m.carConnected = false
+		m.batteryGlitchCount = 0
 	}
 	m.mu.Unlock()
 }
@@ -1677,33 +1734,18 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		m.publish("/lights/head", boolOnOff[reg.Headlights])
 
 	case *protocol.RegisterBatteryLevel:
-		if reg.Valid {
-			m.mu.Lock()
-			maxSoc := m.batteryMaxSoc
-			if maxSoc <= 0 {
-				maxSoc = 94
+		scaledStr, rawStr, isGlitch := m.processBatteryLevel(reg)
+		if isGlitch {
+			if scaledStr != "" {
+				m.publish("/battery/level", scaledStr)
+				log.Debugf("Filtered battery glitch, keeping previous level %v (raw %v)", scaledStr, rawStr)
 			}
-			if reg.Level > maxSoc && reg.Level <= 100 {
-				m.batteryMaxSoc = reg.Level
-				maxSoc = reg.Level
+			if rawStr != "" {
+				m.publish("/battery/raw_level", rawStr)
 			}
-			m.mu.Unlock()
-
-			scaled := scaleBatteryLevel(reg.Level, maxSoc)
-			m.publish("/battery/level", strconv.Itoa(scaled))
-			m.publish("/battery/raw_level", strconv.Itoa(reg.Level))
 		} else {
-			m.mu.RLock()
-			cache := m.mqttData["/battery/level"]
-			rawCache := m.mqttData["/battery/raw_level"]
-			m.mu.RUnlock()
-			if cache != "" {
-				m.publish("/battery/level", cache)
-				log.Debugf("Ignoring invalid battery level reading %v, keeping %v", reg.Level, cache)
-			}
-			if rawCache != "" {
-				m.publish("/battery/raw_level", rawCache)
-			}
+			m.publish("/battery/level", scaledStr)
+			m.publish("/battery/raw_level", rawStr)
 		}
 		m.publish("/lights/parking", boolOnOff[reg.ParkingLights])
 

@@ -156,3 +156,63 @@ func TestScaleBatteryLevel(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessBatteryLevelGlitchFilter(t *testing.T) {
+	m := newMqttClient()
+	m.batteryMaxSoc = 94
+
+	// 1. Initial valid reading 94% -> scaled 100%
+	reg94 := &protocol.RegisterBatteryLevel{Level: 94, Valid: true}
+	scaled, raw, isGlitch := m.processBatteryLevel(reg94)
+	if isGlitch || scaled != "100" || raw != "94" {
+		t.Fatalf("initial reading expected (100, 94, false), got (%s, %s, %v)", scaled, raw, isGlitch)
+	}
+	// Simulate MQTT cache update done by publish()
+	m.mqttData["/battery/level"] = scaled
+	m.mqttData["/battery/raw_level"] = raw
+
+	// 2. Sudden momentary drop to 5% (simulating ECU wake glitch)
+	reg5 := &protocol.RegisterBatteryLevel{Level: 5, Valid: true}
+	scaled, raw, isGlitch = m.processBatteryLevel(reg5)
+	if !isGlitch {
+		t.Fatalf("first 5%% drop should be detected as glitch, got isGlitch=false")
+	}
+	if scaled != "100" || raw != "94" {
+		t.Fatalf("glitch should return cached valid levels (100, 94), got (%s, %s)", scaled, raw)
+	}
+
+	// 3. Second momentary packet of 5% (still within glitch count < 3)
+	scaled, raw, isGlitch = m.processBatteryLevel(reg5)
+	if !isGlitch || scaled != "100" || raw != "94" {
+		t.Fatalf("second 5%% drop should still be filtered as glitch, got (%s, %s, %v)", scaled, raw, isGlitch)
+	}
+
+	// 4. Car returns to normal 94% on next packet -> glitch filter resets and accepts 94%
+	scaled, raw, isGlitch = m.processBatteryLevel(reg94)
+	if isGlitch || scaled != "100" || raw != "94" {
+		t.Fatalf("recovery packet should be accepted immediately, got (%s, %s, %v)", scaled, raw, isGlitch)
+	}
+	if m.batteryGlitchCount != 0 {
+		t.Fatalf("glitch count should be reset to 0, got %d", m.batteryGlitchCount)
+	}
+
+	// 5. Normal gradual discharge (e.g. 94 -> 93 -> 92 -> ... -> 90) must pass immediately
+	reg93 := &protocol.RegisterBatteryLevel{Level: 93, Valid: true}
+	scaled, raw, isGlitch = m.processBatteryLevel(reg93)
+	if isGlitch || scaled != "99" || raw != "93" {
+		t.Fatalf("gradual discharge to 93 must be accepted immediately, got (%s, %s, %v)", scaled, raw, isGlitch)
+	}
+	m.mqttData["/battery/level"] = scaled
+	m.mqttData["/battery/raw_level"] = raw
+
+	// 6. Real sustained drop to 5%: 3 consecutive packets should confirm and accept 5%
+	m.processBatteryLevel(reg5)                         // count 1
+	m.processBatteryLevel(reg5)                         // count 2
+	scaled, raw, isGlitch = m.processBatteryLevel(reg5) // count 3 -> accepted!
+	if isGlitch {
+		t.Fatalf("sustained 3rd reading of 5%% must be accepted as real")
+	}
+	if raw != "5" {
+		t.Fatalf("expected raw 5, got %s", raw)
+	}
+}
