@@ -27,7 +27,7 @@ void ClimateTracker::setModeAndDuration(uint8_t mode, uint8_t duration) {
 
 void ClimateTracker::setPreACState(uint8_t state, bool hasTarget, int hour, int minute) {
     m_state = state;
-    m_hasStartTime = hasTarget;
+    m_hasStartTime = (state == 1) && hasTarget && (hour < 24) && (minute < 60);
     m_startHour = hour;
     m_startMinute = minute;
 
@@ -88,7 +88,7 @@ int ClimateTracker::findScheduledDuration(int hour, int minute) const {
 }
 
 int ClimateTracker::activeDuration() const {
-    if (m_hasStartTime) {
+    if (m_hasStartTime && m_state == 1) {
         int schedDur = findScheduledDuration(m_startHour, m_startMinute);
         if (schedDur > 0) return schedDur;
     }

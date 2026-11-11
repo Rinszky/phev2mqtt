@@ -70,6 +70,8 @@ bool MqttManager::isConnected() {
 void MqttManager::subscribeCommands() {
     String subPattern = topic("/#");
     m_mqtt.subscribe(topic("/climate/+/set").c_str());
+    m_mqtt.subscribe(topic("/set/climate/+").c_str());
+    m_mqtt.subscribe(topic("/climate_duration_min/set").c_str());
     m_mqtt.subscribe(topic("/door/lock/set").c_str());
     m_mqtt.subscribe(topic("/lights/+/set").c_str());
     m_mqtt.subscribe(topic("/locate/set").c_str());
@@ -274,31 +276,43 @@ void MqttManager::handleMessage(char* topicStr, uint8_t* payload, unsigned int l
     if (!m_phev) return;
 
     // Climate Commands
-    if (t == topic("/climate/heat/set")) {
-        if (p.equalsIgnoreCase("on") || p == "1" || p.equalsIgnoreCase("true")) {
+    if (t == topic("/climate/heat/set") || t == topic("/set/climate/heat")) {
+        int explicitDur = p.toInt();
+        if (explicitDur == 10 || explicitDur == 20 || explicitDur == 30) {
+            m_phev->getClimateTracker().setModeAndDuration(PRE_AC_HEAT, explicitDur);
+        }
+        if (p.equalsIgnoreCase("on") || p == "1" || p.equalsIgnoreCase("true") || explicitDur > 0) {
             m_phev->sendPreACCommand(PRE_AC_HEAT, m_phev->getClimateTracker().getSelectedDuration(), m_phev->getClimateTracker().getSelectedDelay());
         } else {
             m_phev->sendPreACStop();
         }
-    } else if (t == topic("/climate/cool/set")) {
-        if (p.equalsIgnoreCase("on") || p == "1" || p.equalsIgnoreCase("true")) {
+    } else if (t == topic("/climate/cool/set") || t == topic("/set/climate/cool")) {
+        int explicitDur = p.toInt();
+        if (explicitDur == 10 || explicitDur == 20 || explicitDur == 30) {
+            m_phev->getClimateTracker().setModeAndDuration(PRE_AC_COOL, explicitDur);
+        }
+        if (p.equalsIgnoreCase("on") || p == "1" || p.equalsIgnoreCase("true") || explicitDur > 0) {
             m_phev->sendPreACCommand(PRE_AC_COOL, m_phev->getClimateTracker().getSelectedDuration(), m_phev->getClimateTracker().getSelectedDelay());
         } else {
             m_phev->sendPreACStop();
         }
-    } else if (t == topic("/climate/windscreen/set")) {
-        if (p.equalsIgnoreCase("on") || p == "1" || p.equalsIgnoreCase("true")) {
+    } else if (t == topic("/climate/windscreen/set") || t == topic("/set/climate/windscreen")) {
+        int explicitDur = p.toInt();
+        if (explicitDur == 10 || explicitDur == 20 || explicitDur == 30) {
+            m_phev->getClimateTracker().setModeAndDuration(PRE_AC_WINDSCREEN, explicitDur);
+        }
+        if (p.equalsIgnoreCase("on") || p == "1" || p.equalsIgnoreCase("true") || explicitDur > 0) {
             m_phev->sendPreACCommand(PRE_AC_WINDSCREEN, m_phev->getClimateTracker().getSelectedDuration(), m_phev->getClimateTracker().getSelectedDelay());
         } else {
             m_phev->sendPreACStop();
         }
-    } else if (t == topic("/climate/duration/set")) {
+    } else if (t == topic("/climate/duration/set") || t == topic("/set/climate/duration") || t == topic("/climate_duration_min/set")) {
         int dur = p.toInt();
         if (dur == 10 || dur == 20 || dur == 30) {
             m_phev->getClimateTracker().setModeAndDuration(m_phev->getClimateStatus().mode, dur);
             publish("/climate/duration", dur);
         }
-    } else if (t == topic("/climate/delay/set")) {
+    } else if (t == topic("/climate/delay/set") || t == topic("/set/climate/delay") || t == topic("/climate_start_delay_min/set")) {
         int del = p.toInt();
         if (del == 0 || del == 5 || del == 10) {
             m_phev->getClimateTracker().setACOperStatus(m_phev->getClimateTracker().isOperating(), m_phev->getClimateTracker().getSelectedDuration(), del, del > 0);
