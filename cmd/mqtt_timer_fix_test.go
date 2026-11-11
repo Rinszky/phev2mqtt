@@ -216,3 +216,38 @@ func TestProcessBatteryLevelGlitchFilter(t *testing.T) {
 		t.Fatalf("expected raw 5, got %s", raw)
 	}
 }
+
+func TestManualPreheatingTenMinGlitchFixed(t *testing.T) {
+	// Car has a scheduled morning timer for 20 minutes (7:00).
+	sched := protocol.NewDefaultClimateSchedule()
+	sched.Timers[0].Enabled = true
+	sched.Timers[0].Hour = 7
+	sched.Timers[0].Minute = 0
+	sched.Timers[0].Duration = 20
+
+	c := newClimateTracker(&sched)
+	c.selectedDuration = 10
+	c.operatingStartTime = time.Now()
+	c.hasStartTime = false
+
+	// When 0x10 arrives indicating PreACOn (with lingering bytes in target time):
+	c.setState(&protocol.RegisterPreACState{
+		State:         protocol.PreACOn,
+		HasTargetTime: true,
+		TargetHour:    7,
+		TargetMinute:  20,
+	})
+
+	if dur := c.activeDuration(); dur != 10 {
+		t.Fatalf("activeDuration must stay 10 mins during active manual session, got %d", dur)
+	}
+
+	st := c.mqttStates()
+	if st["/climate/duration"] != "10" {
+		t.Errorf("duration must be 10, got %s", st["/climate/duration"])
+	}
+	if rem := st["/climate/remaining"]; rem != "10" {
+		t.Errorf("remaining minutes must start at 10, got %s", rem)
+	}
+}
+

@@ -96,9 +96,19 @@ func (c *climate) setMode(m string, dur uint8) {
 func (c *climate) setState(reg *protocol.RegisterPreACState) {
 	st := reg.State
 	c.state = &st
-	c.hasStartTime = reg.HasTargetTime
-	c.startHour = reg.TargetHour
-	c.startMinute = reg.TargetMinute
+	if st == protocol.PreACStarting {
+		c.hasStartTime = reg.HasTargetTime
+		c.startHour = reg.TargetHour
+		c.startMinute = reg.TargetMinute
+	} else if st == protocol.PreACOn {
+		if !c.hasStartTime && reg.HasTargetTime && c.operatingStartTime.IsZero() {
+			c.hasStartTime = true
+			c.startHour = reg.TargetHour
+			c.startMinute = reg.TargetMinute
+		}
+	} else {
+		c.hasStartTime = false
+	}
 
 	isOp := c.operating || st == protocol.PreACOn
 	if isOp && c.operatingStartTime.IsZero() {
@@ -138,7 +148,8 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 
 // activeDuration returns the duration in minutes for the active climate session.
 func (c *climate) activeDuration() int {
-	if c.operating {
+	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
+	if isOperating {
 		if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
 			return c.selectedDuration
 		}
@@ -159,7 +170,7 @@ func (c *climate) activeDuration() int {
 				enabledTimers = append(enabledTimers, timer)
 			}
 		}
-		if len(enabledTimers) == 1 {
+		if len(enabledTimers) == 1 && (c.hasStartTime || (c.state != nil && *c.state == protocol.PreACStarting)) {
 			if enabledTimers[0].Duration == 10 || enabledTimers[0].Duration == 20 || enabledTimers[0].Duration == 30 {
 				return enabledTimers[0].Duration
 			}
@@ -931,7 +942,7 @@ func (m *mqttClient) handleIncomingMqtt(mqttClientConn mqtt.Client, msg mqtt.Mes
 			m.sendImmediateClimate(cl, 0x00, 0, 0)
 		}
 
-	case relTopic == "/set/climate/duration":
+	case relTopic == "/set/climate/duration" || relTopic == "/set/climate_duration_min" || relTopic == "/set/climate_duration":
 		dur, err := strconv.Atoi(payloadStr)
 		if err != nil || (dur != 10 && dur != 20 && dur != 30) {
 			log.Warnf("Invalid climate duration %q (expected 10, 20, or 30)", payloadStr)
@@ -994,6 +1005,12 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 			log.Errorf("Unknown climate mode payload: %s", payloadStr)
 			return
 		}
+		if lower != "off" {
+			m.mu.Lock()
+			m.climate.hasStartTime = false
+			m.climate.operatingStartTime = time.Now()
+			m.mu.Unlock()
+		}
 	} else {
 		var ok bool
 		mode, ok = modeMap[sub]
@@ -1005,9 +1022,18 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 		case "off", "false", "0":
 			mode = 0x00
 		case "on", "true", "1":
-			// keep selected duration
+			m.mu.Lock()
+			m.climate.hasStartTime = false
+			m.climate.operatingStartTime = time.Now()
+			m.mu.Unlock()
 		case "10", "20", "30":
 			durMin, _ = strconv.Atoi(lower)
+			m.mu.Lock()
+			m.climate.selectedDuration = durMin
+			m.climate.hasStartTime = false
+			m.climate.operatingStartTime = time.Now()
+			m.mu.Unlock()
+			m.publish("/climate/duration", strconv.Itoa(durMin))
 		default:
 			log.Errorf("Unknown climate payload %q for %s", payloadStr, sub)
 			return
