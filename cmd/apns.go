@@ -336,7 +336,7 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 			return nil
 		}
 
-		log.Debugf("[APNs] Push to %s returned %d: %s", baseURL, resp.StatusCode, string(respBody))
+		log.Warnf("[APNs] Push to %s returned HTTP %d: %s", baseURL, resp.StatusCode, string(respBody))
 		lastErr = fmt.Errorf("APNs error %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -374,9 +374,11 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 	}
 
 	if targetToken == "" {
-		log.Debug("[APNs] No charging push token registered, skipping push")
+		log.Infof("[APNs] No charging push token registered, skipping push (token=%q, startToken=%q)", token, startToken)
 		return
 	}
+
+	log.Infof("[APNs] Sending charging push (event=%s, soc=%d, remaining=%d, token=%.16s...)", event, soc, remainingMins, targetToken)
 
 	startDate := now.Unix()
 	endDate := now.Add(time.Duration(remainingMins) * time.Minute).Unix()
@@ -488,9 +490,11 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	}
 
 	if targetToken == "" {
-		log.Debug("[APNs] No climate push token registered, skipping push")
+		log.Infof("[APNs] No climate push token registered, skipping push (token=%q, startToken=%q)", token, startToken)
 		return
 	}
+
+	log.Infof("[APNs] Sending climate push (event=%s, mode=%s, remaining=%d, token=%.16s...)", event, mode, remainingMins, targetToken)
 
 	startDate := now.Unix()
 	endDate := now.Add(time.Duration(remainingMins) * time.Minute).Unix()

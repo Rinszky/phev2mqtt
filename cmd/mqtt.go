@@ -786,6 +786,7 @@ func (m *mqttClient) handleIncomingMqtt(mqttClientConn mqtt.Client, msg mqtt.Mes
 	switch {
 	case strings.HasPrefix(relTopic, "/set/register/"):
 		regHex := strings.TrimPrefix(relTopic, "/set/register/")
+		regHex = strings.TrimPrefix(regHex, "0x")
 		register, err := hex.DecodeString(regHex)
 		if err != nil || len(register) != 1 {
 			log.Infof("Bad register in topic [%s]: %v", fullTopic, err)
@@ -1083,6 +1084,25 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 	}
 
 	m.sendImmediateClimate(cl, mode, durIdx, delayIdx)
+	if m.apns != nil {
+		if mode != 0x00 {
+			modeStr := "heat"
+			modeName := "Előfűtés"
+			switch mode {
+			case 0x01:
+				modeStr = "cool"
+				modeName = "Előhűtés"
+			case 0x03:
+				modeStr = "windscreen"
+				modeName = "Szélvédő fűtés"
+			}
+			stopTime := time.Now().Add(time.Duration(durMin) * time.Minute).Format("15:04")
+			log.Infof("[APNs] Immediate climate command dispatched: %s (%d min, stop=%s)", modeStr, durMin, stopTime)
+			m.apns.UpdateClimate(modeStr, modeName, durMin, durMin, stopTime, true)
+		} else {
+			m.apns.EndClimate("off", "Kikapcsolva")
+		}
+	}
 }
 
 func (m *mqttClient) sendImmediateClimate(cl *client.Client, mode, durIdx, delayIdx byte) {
@@ -2871,13 +2891,39 @@ func (m *mqttClient) syncClimateAPNs(states map[string]string) {
 	if m.apns == nil {
 		return
 	}
-	isOperating := states["/climate/operating"] == "ON"
+	isOperating := strings.EqualFold(states["/climate/operating"], "on") ||
+		strings.EqualFold(states["/climate/heat"], "on") ||
+		strings.EqualFold(states["/climate/cool"], "on") ||
+		strings.EqualFold(states["/climate/windscreen"], "on") ||
+		(states["/climate/mode"] != "" && states["/climate/mode"] != "off")
+
 	mode := states["/climate/mode"]
+	if mode == "" || mode == "off" {
+		if strings.EqualFold(states["/climate/heat"], "on") {
+			mode = "heat"
+		} else if strings.EqualFold(states["/climate/cool"], "on") {
+			mode = "cool"
+		} else if strings.EqualFold(states["/climate/windscreen"], "on") {
+			mode = "windscreen"
+		} else if isOperating {
+			mode = "heat"
+		}
+	}
+
 	remStr := states["/climate/remaining"]
 	rem, _ := strconv.Atoi(remStr)
 	durStr := states["/climate/duration"]
 	dur, _ := strconv.Atoi(durStr)
+	if dur <= 0 {
+		dur = 10
+	}
+	if rem <= 0 && isOperating {
+		rem = dur
+	}
 	stopTime := states["/climate/stop_time"]
+	if stopTime == "" || stopTime == "--:--" {
+		stopTime = time.Now().Add(time.Duration(dur) * time.Minute).Format("15:04")
+	}
 
 	modeName := "Előfűtés"
 	switch mode {
@@ -2888,6 +2934,7 @@ func (m *mqttClient) syncClimateAPNs(states map[string]string) {
 	}
 
 	if isOperating {
+		log.Infof("[APNs] syncClimateAPNs: Climate is active (mode=%s, rem=%d, dur=%d, stop=%s), triggering APNs push", mode, rem, dur, stopTime)
 		m.apns.UpdateClimate(mode, modeName, rem, dur, stopTime, true)
 	} else {
 		m.apns.EndClimate(mode, modeName)
