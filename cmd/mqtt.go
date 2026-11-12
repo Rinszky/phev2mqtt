@@ -1037,7 +1037,6 @@ func (m *mqttClient) overrideChargeTimerNow(cl *client.Client) {
 
 func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payloadStr string) {
 	lower := strings.ToLower(strings.TrimSpace(payloadStr))
-	modeMap := map[string]byte{"off": 0x00, "cool": 0x01, "heat": 0x02, "windscreen": 0x03}
 
 	m.mu.RLock()
 	selDur := m.climate.selectedDuration
