@@ -234,7 +234,15 @@ func (a *APNsClient) saveTokens() {
 
 func (a *APNsClient) SetToken(tokenType string, token string) {
 	token = strings.TrimSpace(token)
+	normalizedType := strings.TrimSuffix(strings.ToLower(tokenType), "_token")
+
 	if token == "" {
+		a.mu.Lock()
+		if normalizedType == "climate" {
+			a.tokens.Climate = ""
+			a.saveTokens()
+		}
+		a.mu.Unlock()
 		return
 	}
 
@@ -623,11 +631,13 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	var targetToken string
 	var event string
 	if isNewSession {
-		if startToken != "" {
-			targetToken = startToken
-			event = "start"
-		} else if token != "" {
+		if token != "" {
+			// Live Activity already started locally on device; send update to sync state
 			targetToken = token
+			event = "update"
+		} else if startToken != "" {
+			// No local Live Activity on device; launch remotely via APNs Push-To-Start
+			targetToken = startToken
 			event = "start"
 		}
 	} else {
