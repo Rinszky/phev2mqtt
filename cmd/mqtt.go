@@ -62,6 +62,7 @@ type climate struct {
 	operating          bool
 	delayPending       bool
 	hasOper            bool // register 0x1a received at least once
+	manualSession      bool
 	selectedDuration   int  // 10, 20, 30
 	selectedDelay      int  // 0, 5, 10
 	hasStartTime       bool
@@ -71,6 +72,23 @@ type climate struct {
 	delayStartTime     time.Time
 	operatingStartTime time.Time
 	schedule           *protocol.ClimateSchedule
+}
+
+func (c *climate) isScheduledSession(now time.Time) bool {
+	if c.manualSession {
+		return false
+	}
+	if !c.hasStartTime {
+		return false
+	}
+	start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
+	diff := now.Sub(start)
+	if diff < -12*time.Hour {
+		diff += 24 * time.Hour
+	} else if diff > 12*time.Hour {
+		diff -= 24 * time.Hour
+	}
+	return diff >= -2*time.Minute && diff <= 35*time.Minute
 }
 
 func newClimateTracker(sched ...*protocol.ClimateSchedule) *climate {
@@ -116,6 +134,7 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 	} else if !isOp && !c.delayPending {
 		c.operatingStartTime = time.Time{}
 		c.delayStartTime = time.Time{}
+		c.manualSession = false
 	}
 	c.updateTiming(time.Now())
 }
@@ -135,9 +154,10 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 		c.operatingStartTime = time.Now()
 	} else if !isOp && !c.delayPending {
 		c.operatingStartTime = time.Time{}
+		c.manualSession = false
 	}
 
-	if reg.Duration == 10 || reg.Duration == 20 || reg.Duration == 30 {
+	if !c.manualSession && (reg.Duration == 10 || reg.Duration == 20 || reg.Duration == 30) {
 		c.selectedDuration = reg.Duration
 	}
 	if reg.Delay == 0 || reg.Delay == 5 || reg.Delay == 10 {
@@ -148,19 +168,12 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 
 // activeDuration returns the duration in minutes for the active climate session.
 func (c *climate) activeDuration() int {
-	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
-	if isOperating {
-		if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
-			return c.selectedDuration
-		}
-	}
-	if c.schedule != nil {
-		if c.hasStartTime {
-			for _, timer := range c.schedule.Timers {
-				if timer.Enabled && timer.Hour == c.startHour && (timer.Minute == c.startMinute || timer.Minute/10 == c.startMinute/10) {
-					if timer.Duration == 10 || timer.Duration == 20 || timer.Duration == 30 {
-						return timer.Duration
-					}
+	now := time.Now()
+	if c.isScheduledSession(now) && c.schedule != nil {
+		for _, timer := range c.schedule.Timers {
+			if timer.Enabled && timer.Hour == c.startHour && (timer.Minute == c.startMinute || timer.Minute/10 == c.startMinute/10) {
+				if timer.Duration == 10 || timer.Duration == 20 || timer.Duration == 30 {
+					return timer.Duration
 				}
 			}
 		}
@@ -170,16 +183,17 @@ func (c *climate) activeDuration() int {
 				enabledTimers = append(enabledTimers, timer)
 			}
 		}
-		if len(enabledTimers) == 1 && (c.hasStartTime || (c.state != nil && *c.state == protocol.PreACStarting)) {
+		if len(enabledTimers) == 1 {
 			if enabledTimers[0].Duration == 10 || enabledTimers[0].Duration == 20 || enabledTimers[0].Duration == 30 {
 				return enabledTimers[0].Duration
 			}
 		}
 	}
+
 	if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
 		return c.selectedDuration
 	}
-	return 20
+	return 10
 }
 
 func (c *climate) updateTiming(now time.Time) {
@@ -203,7 +217,7 @@ func (c *climate) updateTiming(now time.Time) {
 	}
 
 	if isOperating {
-		if c.hasStartTime {
+		if c.isScheduledSession(now) {
 			start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
 			if start.After(now.Add(6 * time.Hour)) {
 				start = start.Add(-24 * time.Hour)
@@ -243,7 +257,7 @@ func (c *climate) remainingAndCompletion(now time.Time) (int, string) {
 		}
 		targetStop = refTime.Add(time.Duration(totalMin) * time.Minute)
 	} else if isOperating {
-		if c.hasStartTime {
+		if c.isScheduledSession(now) {
 			start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
 			if start.After(now.Add(6 * time.Hour)) {
 				start = start.Add(-24 * time.Hour)
@@ -1097,8 +1111,11 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 	m.sendImmediateClimate(cl, mode, durIdx, delayIdx)
 	m.mu.Lock()
 	if mode != 0x00 {
+		m.climate.manualSession = true
 		m.climate.selectedDuration = durMin
+		m.climate.operatingStartTime = time.Now()
 	} else {
+		m.climate.manualSession = false
 		m.climate.selectedDuration = 0
 		if m.apns != nil {
 			m.apns.EndClimate("off", "Kikapcsolva")
