@@ -1033,6 +1033,12 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 			m.climate.hasStartTime = false
 			m.climate.operatingStartTime = time.Now()
 			m.mu.Unlock()
+		} else {
+			m.mu.Lock()
+			m.climate.operating = false
+			m.climate.operatingStartTime = time.Time{}
+			m.climate.hasStartTime = false
+			m.mu.Unlock()
 		}
 	} else {
 		var ok bool
@@ -1044,6 +1050,11 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 		switch lower {
 		case "off", "false", "0":
 			mode = 0x00
+			m.mu.Lock()
+			m.climate.operating = false
+			m.climate.operatingStartTime = time.Time{}
+			m.climate.hasStartTime = false
+			m.mu.Unlock()
 		case "on", "true", "1":
 			m.mu.Lock()
 			m.climate.hasStartTime = false

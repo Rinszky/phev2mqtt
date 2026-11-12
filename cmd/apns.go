@@ -374,25 +374,44 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		return
 	}
 
+	isNewSession := !a.lastChargingState && isCharging
 	a.lastChargingUpdate = now
 	a.lastChargingSOC = soc
 	a.lastChargingRem = remainingMins
 	a.lastChargingState = isCharging
-	a.mu.Unlock()
 
-	targetToken := token
-	event := "update"
-	if targetToken == "" && startToken != "" {
-		targetToken = startToken
-		event = "start"
+	token := a.tokens.Charging
+	startToken := a.tokens.PushToStartCharging
+
+	var targetToken string
+	var event string
+	if isNewSession {
+		if startToken != "" {
+			targetToken = startToken
+			event = "start"
+			a.tokens.Charging = ""
+			a.saveTokens()
+		} else {
+			targetToken = token
+			event = "start"
+		}
+	} else {
+		if token != "" {
+			targetToken = token
+			event = "update"
+		} else if startToken != "" {
+			targetToken = startToken
+			event = "update"
+		}
 	}
+	a.mu.Unlock()
 
 	if targetToken == "" {
 		log.Infof("[APNs] No charging push token registered, skipping push (token=%q, startToken=%q)", token, startToken)
 		return
 	}
 
-	log.Infof("[APNs] Sending charging push (event=%s, soc=%d, remaining=%d, token=%.16s...)", event, soc, remainingMins, targetToken)
+	log.Infof("[APNs] Sending charging push (event=%s, isNew=%v, soc=%d, rem=%d, token=%.16s...)", event, isNewSession, soc, remainingMins, targetToken)
 
 	startDate := now.Unix()
 	endDate := now.Add(time.Duration(remainingMins) * time.Minute).Unix()
@@ -457,6 +476,8 @@ func (a *APNsClient) EndCharging(soc int) {
 
 	token := a.tokens.Charging
 	startToken := a.tokens.PushToStartCharging
+	a.tokens.Charging = ""
+	a.saveTokens()
 	a.mu.Unlock()
 
 	tokensToSend := []string{}
@@ -518,25 +539,44 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		return
 	}
 
+	isNewSession := !a.lastClimateState && isActive
 	a.lastClimateUpdate = now
 	a.lastClimateMode = mode
 	a.lastClimateRem = remainingMins
 	a.lastClimateState = isActive
-	a.mu.Unlock()
 
-	targetToken := token
-	event := "update"
-	if targetToken == "" && startToken != "" {
-		targetToken = startToken
-		event = "start"
+	token := a.tokens.Climate
+	startToken := a.tokens.PushToStartClimate
+
+	var targetToken string
+	var event string
+	if isNewSession {
+		if startToken != "" {
+			targetToken = startToken
+			event = "start"
+			a.tokens.Climate = ""
+			a.saveTokens()
+		} else {
+			targetToken = token
+			event = "start"
+		}
+	} else {
+		if token != "" {
+			targetToken = token
+			event = "update"
+		} else if startToken != "" {
+			targetToken = startToken
+			event = "update"
+		}
 	}
+	a.mu.Unlock()
 
 	if targetToken == "" {
 		log.Infof("[APNs] No climate push token registered, skipping push (token=%q, startToken=%q)", token, startToken)
 		return
 	}
 
-	log.Infof("[APNs] Sending climate push (event=%s, mode=%s, remaining=%d, token=%.16s...)", event, mode, remainingMins, targetToken)
+	log.Infof("[APNs] Sending climate push (event=%s, isNew=%v, mode=%s, remaining=%d, token=%.16s...)", event, isNewSession, mode, remainingMins, targetToken)
 
 	startDate := now.Unix()
 	endDate := now.Add(time.Duration(remainingMins) * time.Minute).Unix()
@@ -601,6 +641,8 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 
 	token := a.tokens.Climate
 	startToken := a.tokens.PushToStartClimate
+	a.tokens.Climate = ""
+	a.saveTokens()
 	a.mu.Unlock()
 
 	tokensToSend := []string{}
