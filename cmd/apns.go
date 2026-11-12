@@ -621,7 +621,6 @@ func (a *APNsClient) EndCharging(soc int) {
 	a.lastChargingRem = 0
 
 	token := a.tokens.Charging
-	startToken := a.tokens.PushToStartCharging
 
 	if a.fcm != nil {
 		fcmTokens := make(map[string]bool)
