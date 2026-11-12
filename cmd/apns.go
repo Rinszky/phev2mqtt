@@ -57,8 +57,9 @@ type APNsClient struct {
 
 	lastClimateUpdate  time.Time
 	lastClimateMode    string
-	lastClimateRem     int
-	lastClimateState   bool
+	lastClimateRem      int
+	lastClimateState    bool
+	climateSessionStart time.Time
 }
 
 func newAPNsClient() *APNsClient {
@@ -556,7 +557,12 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		return
 	}
 
-	isNewSession := !a.lastClimateState && isActive
+	// New session if state transitioned to active or if we have no activity token yet
+	isNewSession := (!a.lastClimateState && isActive) || (isActive && a.tokens.Climate == "")
+	if isNewSession || a.climateSessionStart.IsZero() {
+		a.climateSessionStart = now
+	}
+
 	a.lastClimateUpdate = now
 	a.lastClimateMode = mode
 	a.lastClimateRem = remainingMins
@@ -568,7 +574,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		if startToken != "" {
 			targetToken = startToken
 			event = "start"
-		} else {
+		} else if token != "" {
 			targetToken = token
 			event = "start"
 		}
@@ -591,12 +597,16 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 
 	log.Infof("[APNs] Sending climate push (event=%s, isNew=%v, mode=%s, remaining=%d, token=%.16s...)", event, isNewSession, mode, remainingMins, targetToken)
 
-	startDate := now.Unix()
-	endDate := now.Add(time.Duration(remainingMins) * time.Minute).Unix()
+	startDate := a.climateSessionStart.Unix()
+	totalDur := duration
+	if totalDur <= 0 {
+		totalDur = 10
+	}
+	endDate := a.climateSessionStart.Add(time.Duration(totalDur) * time.Minute).Unix()
 
 	payloadMap := map[string]interface{}{
 		"aps": map[string]interface{}{
-			"timestamp": startDate,
+			"timestamp": now.Unix(),
 			"event":     event,
 			"content-state": map[string]interface{}{
 				"mode":          mode,
@@ -645,25 +655,22 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	}
 
 	a.mu.Lock()
-	if !a.lastClimateState {
+	if !a.lastClimateState && a.tokens.Climate == "" {
 		a.mu.Unlock()
 		return
 	}
 	a.lastClimateState = false
 	a.lastClimateMode = "off"
 	a.lastClimateRem = 0
+	a.climateSessionStart = time.Time{}
 
 	token := a.tokens.Climate
-	startToken := a.tokens.PushToStartClimate
+	a.tokens.Climate = "" // Clear token so next session starts fresh
+	a.saveTokens()
 	a.mu.Unlock()
 
-	target := token
-	if target == "" {
-		target = startToken
-	}
-
-	if target == "" {
-		log.Infof("[APNs] EndClimate: No climate token registered to send end push")
+	if token == "" {
+		log.Infof("[APNs] EndClimate: No active climate activity token to dismiss")
 		return
 	}
 
@@ -688,10 +695,10 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	}
 
 	data, _ := json.Marshal(payloadMap)
-	log.Infof("[APNs] Sending climate end push (token=%.16s...)", target)
+	log.Infof("[APNs] Sending climate end push (token=%.16s...)", token)
 	go func(t string) {
 		if err := a.sendPush(t, data); err != nil {
 			log.Warnf("[APNs] Failed to send climate end push: %v", err)
 		}
-	}(target)
+	}(token)
 }

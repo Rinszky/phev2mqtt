@@ -183,6 +183,13 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 
 // activeDuration returns the duration in minutes for the active climate session.
 func (c *climate) activeDuration() int {
+	if c.manualSession {
+		if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
+			return c.selectedDuration
+		}
+		return 10
+	}
+
 	now := time.Now()
 	if c.isScheduledSession(now) && c.schedule != nil {
 		for _, timer := range c.schedule.Timers {
@@ -233,7 +240,7 @@ func (c *climate) updateTiming(now time.Time) {
 	}
 
 	if isOperating {
-		if c.isScheduledSession(now) {
+		if !c.manualSession && c.isScheduledSession(now) {
 			start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
 			if start.After(now.Add(6 * time.Hour)) {
 				start = start.Add(-24 * time.Hour)
@@ -1029,68 +1036,93 @@ func (m *mqttClient) overrideChargeTimerNow(cl *client.Client) {
 }
 
 func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payloadStr string) {
-	lower := strings.ToLower(payloadStr)
+	lower := strings.ToLower(strings.TrimSpace(payloadStr))
 	modeMap := map[string]byte{"off": 0x00, "cool": 0x01, "heat": 0x02, "windscreen": 0x03}
 
 	m.mu.RLock()
 	selDur := m.climate.selectedDuration
 	selDelay := m.climate.selectedDelay
+	isCurrentlyOperating := m.climate.operating || (m.climate.state != nil && *m.climate.state == protocol.PreACOn)
 	m.mu.RUnlock()
+
+	if selDur <= 0 {
+		selDur = 10
+	}
 
 	var mode byte
 	durMin := selDur
+	targetModeStr := "heat"
 
-	if sub == "mode" {
-		var ok bool
-		mode, ok = modeMap[lower]
-		if !ok {
-			log.Errorf("Unknown climate mode payload: %s", payloadStr)
-			return
-		}
-		if lower != "off" {
-			m.mu.Lock()
-			m.climate.hasStartTime = false
-			m.climate.operatingStartTime = time.Now()
-			m.mu.Unlock()
-		} else {
-			m.mu.Lock()
-			m.climate.operating = false
-			m.climate.operatingStartTime = time.Time{}
-			m.climate.hasStartTime = false
-			m.mu.Unlock()
-		}
-	} else {
-		var ok bool
-		mode, ok = modeMap[sub]
-		if !ok {
-			log.Errorf("Unknown climate subtopic: %s", sub)
-			return
-		}
+	subLower := strings.ToLower(sub)
+	switch subLower {
+	case "mode", "state":
 		switch lower {
-		case "off", "false", "0":
+		case "off", "0", "false":
 			mode = 0x00
-			m.mu.Lock()
-			m.climate.operating = false
-			m.climate.operatingStartTime = time.Time{}
-			m.climate.hasStartTime = false
-			m.mu.Unlock()
-		case "on", "true", "1":
-			m.mu.Lock()
-			m.climate.hasStartTime = false
-			m.climate.operatingStartTime = time.Now()
-			m.mu.Unlock()
+			targetModeStr = "off"
+		case "cool":
+			mode = 0x01
+			targetModeStr = "cool"
+		case "windscreen":
+			mode = 0x03
+			targetModeStr = "windscreen"
+		case "heat", "on", "1", "true":
+			mode = 0x02
+			targetModeStr = "heat"
+		default:
+			log.Errorf("Unknown climate %s payload: %s", sub, payloadStr)
+			return
+		}
+
+	case "cool":
+		switch lower {
+		case "off", "0", "false":
+			mode = 0x00
+			targetModeStr = "off"
 		case "10", "20", "30":
 			durMin, _ = strconv.Atoi(lower)
-			m.mu.Lock()
-			m.climate.selectedDuration = durMin
-			m.climate.hasStartTime = false
-			m.climate.operatingStartTime = time.Now()
-			m.mu.Unlock()
-			m.publish("/climate/duration", strconv.Itoa(durMin))
+			mode = 0x01
+			targetModeStr = "cool"
 		default:
-			log.Errorf("Unknown climate payload %q for %s", payloadStr, sub)
-			return
+			mode = 0x01
+			targetModeStr = "cool"
 		}
+
+	case "heat":
+		switch lower {
+		case "off", "0", "false":
+			mode = 0x00
+			targetModeStr = "off"
+		case "10", "20", "30":
+			durMin, _ = strconv.Atoi(lower)
+			mode = 0x02
+			targetModeStr = "heat"
+		default:
+			mode = 0x02
+			targetModeStr = "heat"
+		}
+
+	case "windscreen":
+		switch lower {
+		case "off", "0", "false":
+			mode = 0x00
+			targetModeStr = "off"
+		case "10", "20", "30":
+			durMin, _ = strconv.Atoi(lower)
+			mode = 0x03
+			targetModeStr = "windscreen"
+		default:
+			mode = 0x03
+			targetModeStr = "windscreen"
+		}
+
+	case "off":
+		mode = 0x00
+		targetModeStr = "off"
+
+	default:
+		log.Errorf("Unknown climate subtopic: %s", sub)
+		return
 	}
 
 	var durIdx byte
@@ -1114,13 +1146,23 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 	}
 
 	m.sendImmediateClimate(cl, mode, durIdx, delayIdx)
+
 	m.mu.Lock()
 	if mode != 0x00 {
 		m.climate.manualSession = true
 		m.climate.selectedDuration = durMin
-		m.climate.operatingStartTime = time.Now()
-		m.climate.targetStopTime = m.climate.operatingStartTime.Add(time.Duration(durMin) * time.Minute)
-		m.climate.stopTime = m.climate.targetStopTime.Format("15:04")
+		m.climate.operating = true
+		m.climate.hasStartTime = false
+		m.climate.mode = &targetModeStr
+		activeState := protocol.PreACOn
+		m.climate.state = &activeState
+
+		// Only establish operating start time if not already running a session
+		if !isCurrentlyOperating || m.climate.operatingStartTime.IsZero() {
+			m.climate.operatingStartTime = time.Now()
+			m.climate.targetStopTime = m.climate.operatingStartTime.Add(time.Duration(durMin) * time.Minute)
+			m.climate.stopTime = m.climate.targetStopTime.Format("15:04")
+		}
 	} else {
 		offStr := "off"
 		termState := protocol.PreACOff
