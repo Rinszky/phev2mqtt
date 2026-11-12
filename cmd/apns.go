@@ -516,7 +516,7 @@ func (a *APNsClient) EndCharging(soc int) {
 		"aps": map[string]interface{}{
 			"timestamp":      now,
 			"event":          "end",
-			"dismissal-date": 0,
+			"dismissal-date": now,
 			"content-state": map[string]interface{}{
 				"soc":            soc,
 				"remainingMins":  0,
@@ -633,11 +633,6 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 			"body":  fmt.Sprintf("Időtartam: %d perc (Leállás: ~%s)", duration, stopTime),
 			"sound": "default",
 		}
-	} else {
-		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
-			"title": modeName,
-			"body":  fmt.Sprintf("%d perc van hátra (Leállás: ~%s)", remainingMins, stopTime),
-		}
 	}
 
 	data, _ := json.Marshal(payloadMap)
@@ -679,7 +674,7 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 		"aps": map[string]interface{}{
 			"timestamp":      now,
 			"event":          "end",
-			"dismissal-date": 0,
+			"dismissal-date": now,
 			"content-state": map[string]interface{}{
 				"mode":          mode,
 				"modeName":      modeName,
