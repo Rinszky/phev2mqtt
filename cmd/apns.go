@@ -33,6 +33,8 @@ type APNsTokens struct {
 	KnownClimateTokens  []string `json:"known_climate_tokens,omitempty"`
 	PushToStartCharging string   `json:"push_to_start_charging"`
 	PushToStartClimate  string   `json:"push_to_start_climate"`
+	FCM                 string   `json:"fcm,omitempty"`
+	KnownFCMTokens      []string `json:"known_fcm_tokens,omitempty"`
 }
 
 type APNsClient struct {
@@ -55,16 +57,20 @@ type APNsClient struct {
 	climatePendingEnd   bool
 	climatePendingEndAt time.Time
 
+	// Android FCM Client & multi-device tracking
+	fcm            *FCMClient
+	knownFCMTokens map[string]time.Time
+
 	// Rate limiting & state tracking
 	lastChargingUpdate time.Time
 	lastChargingSOC    int
 	lastChargingRem    int
 	lastChargingState  bool
 
-	lastClimateUpdate  time.Time
-	lastClimateMode    string
-	lastClimateRem     int
-	lastClimateState   bool
+	lastClimateUpdate   time.Time
+	lastClimateMode     string
+	lastClimateRem      int
+	lastClimateState    bool
 	climateSessionStart time.Time
 }
 
@@ -153,6 +159,8 @@ func newAPNsClient() *APNsClient {
 		isSandboxToken:     make(map[string]bool),
 		isProductionToken:  make(map[string]bool),
 		knownClimateTokens: make(map[string]time.Time),
+		knownFCMTokens:     make(map[string]time.Time),
+		fcm:                NewFCMClient(""),
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				ForceAttemptHTTP2: true,
@@ -190,7 +198,7 @@ func (a *APNsClient) loadTokens() {
 		data, err := os.ReadFile(p)
 		if err == nil {
 			var tokens APNsTokens
-			if err := json.Unmarshal(data, &tokens); err == nil && (tokens.Charging != "" || tokens.Climate != "" || tokens.PushToStartClimate != "" || len(tokens.KnownClimateTokens) > 0) {
+			if err := json.Unmarshal(data, &tokens); err == nil && (tokens.Charging != "" || tokens.Climate != "" || tokens.PushToStartClimate != "" || len(tokens.KnownClimateTokens) > 0 || tokens.FCM != "" || len(tokens.KnownFCMTokens) > 0) {
 				a.tokens = tokens
 				if a.knownClimateTokens == nil {
 					a.knownClimateTokens = make(map[string]time.Time)
@@ -203,7 +211,18 @@ func (a *APNsClient) loadTokens() {
 				if tokens.Climate != "" {
 					a.knownClimateTokens[tokens.Climate] = time.Now()
 				}
-				log.Infof("[APNs] Loaded stored push tokens from %s (%d known climate tokens)", p, len(a.knownClimateTokens))
+				if a.knownFCMTokens == nil {
+					a.knownFCMTokens = make(map[string]time.Time)
+				}
+				for _, t := range tokens.KnownFCMTokens {
+					if t != "" {
+						a.knownFCMTokens[t] = time.Now()
+					}
+				}
+				if tokens.FCM != "" {
+					a.knownFCMTokens[tokens.FCM] = time.Now()
+				}
+				log.Infof("[APNs] Loaded stored push tokens from %s (%d known climate tokens, %d known FCM tokens)", p, len(a.knownClimateTokens), len(a.knownFCMTokens))
 				break
 			}
 		}
@@ -219,6 +238,15 @@ func (a *APNsClient) saveTokens() {
 			}
 		}
 		a.tokens.KnownClimateTokens = list
+	}
+	if a.knownFCMTokens != nil {
+		var list []string
+		for t := range a.knownFCMTokens {
+			if t != "" {
+				list = append(list, t)
+			}
+		}
+		a.tokens.KnownFCMTokens = list
 	}
 
 	data, err := json.MarshalIndent(a.tokens, "", "  ")
@@ -244,10 +272,25 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	if a.knownClimateTokens == nil {
 		a.knownClimateTokens = make(map[string]time.Time)
 	}
+	if a.knownFCMTokens == nil {
+		a.knownFCMTokens = make(map[string]time.Time)
+	}
 
 	changed := false
 	var shouldDismissClimate bool
+	var isFCMToken bool
+
 	switch normalizedType {
+	case "fcm", "android", "fcm_climate":
+		isFCMToken = true
+		a.knownFCMTokens[token] = time.Now()
+		if a.tokens.FCM != token {
+			a.tokens.FCM = token
+			changed = true
+		}
+		if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
+			shouldDismissClimate = true
+		}
 	case "charging":
 		if a.tokens.Charging != token {
 			a.tokens.Charging = token
@@ -277,6 +320,28 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 		// Try parsing as JSON object
 		var parsed map[string]string
 		if err := json.Unmarshal([]byte(token), &parsed); err == nil {
+			if v, ok := parsed["fcm"]; ok && v != "" {
+				isFCMToken = true
+				a.knownFCMTokens[v] = time.Now()
+				if a.tokens.FCM != v {
+					a.tokens.FCM = v
+					changed = true
+				}
+				if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
+					shouldDismissClimate = true
+				}
+			}
+			if v, ok := parsed["fcm_token"]; ok && v != "" {
+				isFCMToken = true
+				a.knownFCMTokens[v] = time.Now()
+				if a.tokens.FCM != v {
+					a.tokens.FCM = v
+					changed = true
+				}
+				if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
+					shouldDismissClimate = true
+				}
+			}
 			if v, ok := parsed["charging"]; ok && v != "" {
 				a.tokens.Charging = v
 				changed = true
@@ -299,8 +364,15 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	a.mu.Unlock()
 
 	if shouldDismissClimate {
-		log.Infof("[APNs] Climate token received while climate is off/ending (%.16s...), sending immediate dismissal", token)
-		go a.sendEndClimateToToken(token)
+		if isFCMToken {
+			if a.fcm != nil {
+				log.Infof("[FCM] Climate token received while climate is off/ending (%.16s...), sending immediate dismissal", token)
+				go a.fcm.EndClimate(token)
+			}
+		} else {
+			log.Infof("[APNs] Climate token received while climate is off/ending (%.16s...), sending immediate dismissal", token)
+			go a.sendEndClimateToToken(token)
+		}
 	}
 }
 
@@ -428,8 +500,8 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 
 // UpdateCharging sends a Live Activity update for battery charging
 func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime string, isCharging bool) {
-	if a.privateKey == nil {
-		log.Errorf("[APNs] Cannot send charging push: APNs private key is nil! Check .p8 key file on Pi.")
+	if a.privateKey == nil && a.fcm == nil {
+		log.Errorf("[Push] Cannot send charging push: neither APNs key nor FCM service account configured")
 		return
 	}
 
@@ -449,6 +521,31 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 	a.lastChargingSOC = soc
 	a.lastChargingRem = remainingMins
 	a.lastChargingState = isCharging
+
+	// Send to FCM Android devices
+	if a.fcm != nil {
+		fcmTokens := make(map[string]bool)
+		if a.tokens.FCM != "" {
+			fcmTokens[a.tokens.FCM] = true
+		}
+		for tok := range a.knownFCMTokens {
+			if tok != "" {
+				fcmTokens[tok] = true
+			}
+		}
+		for tok := range fcmTokens {
+			go func(target string) {
+				if err := a.fcm.UpdateCharging(target, soc, remainingMins, completionTime); err != nil {
+					log.Warnf("[FCM] Failed to send charging update push: %v", err)
+				}
+			}(tok)
+		}
+	}
+
+	if a.privateKey == nil {
+		a.mu.Unlock()
+		return
+	}
 
 	var targetToken string
 	var event string
@@ -473,7 +570,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 	a.mu.Unlock()
 
 	if targetToken == "" {
-		log.Infof("[APNs] No charging push token registered, skipping push (token=%q, startToken=%q)", token, startToken)
+		log.Infof("[APNs] No charging push token registered, skipping APNs push (token=%q, startToken=%q)", token, startToken)
 		return
 	}
 
@@ -529,7 +626,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 
 // EndCharging dismisses the charging Live Activity
 func (a *APNsClient) EndCharging(soc int) {
-	if a.privateKey == nil {
+	if a.privateKey == nil && a.fcm == nil {
 		return
 	}
 
@@ -543,7 +640,30 @@ func (a *APNsClient) EndCharging(soc int) {
 
 	token := a.tokens.Charging
 	startToken := a.tokens.PushToStartCharging
+
+	if a.fcm != nil {
+		fcmTokens := make(map[string]bool)
+		if a.tokens.FCM != "" {
+			fcmTokens[a.tokens.FCM] = true
+		}
+		for tok := range a.knownFCMTokens {
+			if tok != "" {
+				fcmTokens[tok] = true
+			}
+		}
+		for tok := range fcmTokens {
+			go func(target string) {
+				if err := a.fcm.EndCharging(target); err != nil {
+					log.Warnf("[FCM] Failed to send charging end push: %v", err)
+				}
+			}(tok)
+		}
+	}
 	a.mu.Unlock()
+
+	if a.privateKey == nil {
+		return
+	}
 
 	tokensToSend := []string{}
 	if token != "" {
@@ -589,8 +709,8 @@ func (a *APNsClient) EndCharging(soc int) {
 
 // UpdateClimate sends a Live Activity update for HVAC / preconditioning
 func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins int, duration int, stopTime string, isActive bool) {
-	if a.privateKey == nil {
-		log.Errorf("[APNs] Cannot send climate push: APNs private key is nil! Check .p8 key file on Pi.")
+	if a.privateKey == nil && a.fcm == nil {
+		log.Errorf("[Push] Cannot send climate push: neither APNs key nor FCM service account configured")
 		return
 	}
 
@@ -620,6 +740,31 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	a.lastClimateMode = mode
 	a.lastClimateRem = remainingMins
 	a.lastClimateState = isActive
+
+	// Dispatch FCM pushes to all known Android devices
+	if a.fcm != nil {
+		fcmTokens := make(map[string]bool)
+		if a.tokens.FCM != "" {
+			fcmTokens[a.tokens.FCM] = true
+		}
+		for tok := range a.knownFCMTokens {
+			if tok != "" {
+				fcmTokens[tok] = true
+			}
+		}
+		for tok := range fcmTokens {
+			go func(target string) {
+				if err := a.fcm.UpdateClimate(target, mode, modeName, remainingMins, duration, stopTime, isActive); err != nil {
+					log.Warnf("[FCM] Failed to send climate update: %v", err)
+				}
+			}(tok)
+		}
+	}
+
+	if a.privateKey == nil {
+		a.mu.Unlock()
+		return
+	}
 
 	var targetToken string
 	var event string
@@ -700,7 +845,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 
 // EndClimate dismisses the climate Live Activity across all known and incoming tokens
 func (a *APNsClient) EndClimate(mode string, modeName string) {
-	if a.privateKey == nil {
+	if a.privateKey == nil && a.fcm == nil {
 		return
 	}
 
@@ -712,6 +857,25 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	a.climatePendingEnd = true
 	a.climatePendingEndAt = time.Now().Add(5 * time.Minute)
 
+	if a.fcm != nil {
+		fcmTokens := make(map[string]bool)
+		if a.tokens.FCM != "" {
+			fcmTokens[a.tokens.FCM] = true
+		}
+		for tok := range a.knownFCMTokens {
+			if tok != "" {
+				fcmTokens[tok] = true
+			}
+		}
+		for tok := range fcmTokens {
+			go func(target string) {
+				if err := a.fcm.EndClimate(target); err != nil {
+					log.Warnf("[FCM] Failed to send climate end push: %v", err)
+				}
+			}(tok)
+		}
+	}
+
 	tokensToDismiss := make(map[string]bool)
 	if a.tokens.Climate != "" {
 		tokensToDismiss[a.tokens.Climate] = true
@@ -722,6 +886,10 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 		}
 	}
 	a.mu.Unlock()
+
+	if a.privateKey == nil {
+		return
+	}
 
 	if len(tokensToDismiss) == 0 {
 		log.Infof("[APNs] EndClimate: No active climate activity token to dismiss yet; armed climatePendingEnd=true for incoming tokens")
