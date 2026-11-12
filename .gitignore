@@ -1,0 +1,4 @@
+*.p8
+.DS_Store
+*.test
+bin/

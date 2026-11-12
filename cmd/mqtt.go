@@ -503,6 +503,7 @@ type mqttClient struct {
 	lastBatteryRaw     int
 	batteryGlitchCount int
 
+	apns    *APNsClient
 	enabled bool
 }
 
@@ -517,6 +518,7 @@ func newMqttClient() *mqttClient {
 		enabled:            true,
 	}
 	mc.climate = newClimateTracker(&mc.climateSchedule)
+	mc.apns = newAPNsClient()
 	return mc
 }
 
@@ -649,6 +651,14 @@ func (m *mqttClient) onMqttConnect(c mqtt.Client) {
 	if token := c.Subscribe(m.topic("/settings/dump"), 0, nil); token.Wait() && token.Error() != nil {
 		log.Errorf("Error subscribing to /settings/dump: %v", token.Error())
 	}
+	if token := c.Subscribe(m.topic("/apns/#"), 0, nil); token.Wait() && token.Error() != nil {
+		log.Errorf("Error subscribing to /apns/#: %v", token.Error())
+	}
+	if m.prefix != "phev" {
+		if token := c.Subscribe("phev/apns/#", 0, nil); token.Wait() && token.Error() != nil {
+			log.Debugf("Error subscribing to phev/apns/#: %v", token.Error())
+		}
+	}
 	if m.haDiscovery && m.haDiscoveryPrefix != "" {
 		birthTopic := m.haDiscoveryPrefix + "/status"
 		if token := c.Subscribe(birthTopic, 0, nil); token.Wait() && token.Error() != nil {
@@ -715,6 +725,18 @@ func (m *mqttClient) handleIncomingMqtt(mqttClientConn mqtt.Client, msg mqtt.Mes
 	}
 
 	log.Infof("Topic: [%s] Payload: [%s]", fullTopic, payloadStr)
+
+	// Intercept incoming APNs Live Activity push tokens
+	if strings.Contains(fullTopic, "/apns/") {
+		parts := strings.Split(fullTopic, "/apns/")
+		if len(parts) == 2 {
+			tokenType := parts[1]
+			if m.apns != nil {
+				m.apns.SetToken(tokenType, payloadStr)
+			}
+			return
+		}
+	}
 
 	if !strings.HasPrefix(fullTopic, m.prefix+"/") {
 		return
@@ -1651,6 +1673,7 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		if schedMode != "" {
 			m.publish("/climate/timer/mode", schedMode)
 		}
+		m.syncClimateAPNs(states)
 
 	case *protocol.RegisterPreACState:
 		m.mu.Lock()
@@ -1660,6 +1683,7 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		for t, p := range states {
 			m.publish(t, p)
 		}
+		m.syncClimateAPNs(states)
 
 	case *protocol.RegisterACOperStatus:
 		m.publish("/ignition/state", reg.Ignition)
@@ -1671,6 +1695,7 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		for t, p := range states {
 			m.publish(t, p)
 		}
+		m.syncClimateAPNs(states)
 
 	case *protocol.RegisterClimateTimers:
 		m.mu.Lock()
@@ -1714,9 +1739,24 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		if !reg.Charging {
 			m.publish("/charge/remaining", "0")
 			m.publish("/charge/completion_time", "none")
+			if m.apns != nil {
+				m.mu.RLock()
+				socStr := m.mqttData["/battery/level"]
+				m.mu.RUnlock()
+				soc, _ := strconv.Atoi(socStr)
+				m.apns.EndCharging(soc)
+			}
 		} else if reg.Remaining < 1000 {
 			m.publish("/charge/remaining", strconv.Itoa(reg.Remaining))
-			m.publish("/charge/completion_time", chargeCompletionTime(true, reg.Remaining, time.Now()))
+			compTime := chargeCompletionTime(true, reg.Remaining, time.Now())
+			m.publish("/charge/completion_time", compTime)
+			if m.apns != nil {
+				m.mu.RLock()
+				socStr := m.mqttData["/battery/level"]
+				m.mu.RUnlock()
+				soc, _ := strconv.Atoi(socStr)
+				m.apns.UpdateCharging(soc, reg.Remaining, compTime, true)
+			}
 		} else {
 			log.Debugf("Ignoring charge remaining reading: %v", reg.Remaining)
 			m.mu.RLock()
@@ -1725,7 +1765,15 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 			if cache != "" {
 				m.publish("/charge/remaining", cache)
 				rem, _ := strconv.Atoi(cache)
-				m.publish("/charge/completion_time", chargeCompletionTime(true, rem, time.Now()))
+				compTime := chargeCompletionTime(true, rem, time.Now())
+				m.publish("/charge/completion_time", compTime)
+				if m.apns != nil {
+					m.mu.RLock()
+					socStr := m.mqttData["/battery/level"]
+					m.mu.RUnlock()
+					soc, _ := strconv.Atoi(socStr)
+					m.apns.UpdateCharging(soc, rem, compTime, true)
+				}
 			}
 		}
 
@@ -1772,6 +1820,18 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		} else {
 			m.publish("/battery/level", scaledStr)
 			m.publish("/battery/raw_level", rawStr)
+			if m.apns != nil {
+				m.mu.RLock()
+				isCharging := m.mqttData["/charge/charging"] == "ON"
+				remStr := m.mqttData["/charge/remaining"]
+				compTime := m.mqttData["/charge/completion_time"]
+				m.mu.RUnlock()
+				if isCharging {
+					soc, _ := strconv.Atoi(scaledStr)
+					rem, _ := strconv.Atoi(remStr)
+					m.apns.UpdateCharging(soc, rem, compTime, true)
+				}
+			}
 		}
 		m.publish("/lights/parking", boolOnOff[reg.ParkingLights])
 
@@ -2807,6 +2867,33 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 	}
 }
 
+func (m *mqttClient) syncClimateAPNs(states map[string]string) {
+	if m.apns == nil {
+		return
+	}
+	isOperating := states["/climate/operating"] == "ON"
+	mode := states["/climate/mode"]
+	remStr := states["/climate/remaining"]
+	rem, _ := strconv.Atoi(remStr)
+	durStr := states["/climate/duration"]
+	dur, _ := strconv.Atoi(durStr)
+	stopTime := states["/climate/stop_time"]
+
+	modeName := "Előfűtés"
+	switch mode {
+	case "cool":
+		modeName = "Előhűtés"
+	case "windscreen":
+		modeName = "Szélvédő fűtés"
+	}
+
+	if isOperating {
+		m.apns.UpdateClimate(mode, modeName, rem, dur, stopTime, true)
+	} else {
+		m.apns.EndClimate(mode, modeName)
+	}
+}
+
 func init() {
 	clientCmd.AddCommand(mqttCmd)
 
@@ -2826,6 +2913,11 @@ func init() {
 	mqttCmd.Flags().String("wifi_restart_command", defaultWifiRestartCmd, "Command to restart Wifi connection to Phev")
 	mqttCmd.Flags().Int("battery_max_soc", 94, "Maximum raw battery SoC (in %) mapped to 100% display SoC (default 94; set to 100 to disable scaling)")
 
+	mqttCmd.Flags().String("apns_key_file", "", "Path to Apple Developer APNs AuthKey (.p8) private key")
+	mqttCmd.Flags().String("apns_key_id", "34BYS72AWT", "Apple Developer APNs Key ID")
+	mqttCmd.Flags().String("apns_team_id", "CSMCPWWS2A", "Apple Developer Team ID")
+	mqttCmd.Flags().String("apns_bundle_id", "com.outlander.connect", "iOS App Bundle ID for APNs Live Activities")
+
 	viper.BindPFlag("mqtt_server", mqttCmd.Flags().Lookup("mqtt_server"))
 	viper.BindPFlag("mqtt_username", mqttCmd.Flags().Lookup("mqtt_username"))
 	viper.BindPFlag("mqtt_password", mqttCmd.Flags().Lookup("mqtt_password"))
@@ -2841,4 +2933,9 @@ func init() {
 	viper.BindPFlag("wifi_restart_time", mqttCmd.Flags().Lookup("wifi_restart_time"))
 	viper.BindPFlag("wifi_restart_retry_time", mqttCmd.Flags().Lookup("wifi_restart_retry_time"))
 	viper.BindPFlag("wifi_restart_command", mqttCmd.Flags().Lookup("wifi_restart_command"))
+
+	viper.BindPFlag("apns_key_file", mqttCmd.Flags().Lookup("apns_key_file"))
+	viper.BindPFlag("apns_key_id", mqttCmd.Flags().Lookup("apns_key_id"))
+	viper.BindPFlag("apns_team_id", mqttCmd.Flags().Lookup("apns_team_id"))
+	viper.BindPFlag("apns_bundle_id", mqttCmd.Flags().Lookup("apns_bundle_id"))
 }
