@@ -28,10 +28,11 @@ import (
 )
 
 type APNsTokens struct {
-	Charging            string `json:"charging"`
-	Climate             string `json:"climate"`
-	PushToStartCharging string `json:"push_to_start_charging"`
-	PushToStartClimate  string `json:"push_to_start_climate"`
+	Charging            string   `json:"charging"`
+	Climate             string   `json:"climate"`
+	KnownClimateTokens  []string `json:"known_climate_tokens,omitempty"`
+	PushToStartCharging string   `json:"push_to_start_charging"`
+	PushToStartClimate  string   `json:"push_to_start_climate"`
 }
 
 type APNsClient struct {
@@ -49,6 +50,11 @@ type APNsClient struct {
 	isSandboxToken     map[string]bool
 	isProductionToken  map[string]bool
 
+	// Multi-token tracking & late-arrival dismissal
+	knownClimateTokens  map[string]time.Time
+	climatePendingEnd   bool
+	climatePendingEndAt time.Time
+
 	// Rate limiting & state tracking
 	lastChargingUpdate time.Time
 	lastChargingSOC    int
@@ -57,8 +63,8 @@ type APNsClient struct {
 
 	lastClimateUpdate  time.Time
 	lastClimateMode    string
-	lastClimateRem      int
-	lastClimateState    bool
+	lastClimateRem     int
+	lastClimateState   bool
 	climateSessionStart time.Time
 }
 
@@ -139,13 +145,14 @@ func newAPNsClient() *APNsClient {
 	}
 
 	client := &APNsClient{
-		privateKey:        privateKey,
-		keyID:             keyID,
-		teamID:            teamID,
-		bundleID:          bundleID,
-		tokenFilePath:     tokenFile,
-		isSandboxToken:    make(map[string]bool),
-		isProductionToken: make(map[string]bool),
+		privateKey:         privateKey,
+		keyID:              keyID,
+		teamID:             teamID,
+		bundleID:           bundleID,
+		tokenFilePath:      tokenFile,
+		isSandboxToken:     make(map[string]bool),
+		isProductionToken:  make(map[string]bool),
+		knownClimateTokens: make(map[string]time.Time),
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				ForceAttemptHTTP2: true,
@@ -183,9 +190,20 @@ func (a *APNsClient) loadTokens() {
 		data, err := os.ReadFile(p)
 		if err == nil {
 			var tokens APNsTokens
-			if err := json.Unmarshal(data, &tokens); err == nil && (tokens.Charging != "" || tokens.Climate != "" || tokens.PushToStartClimate != "") {
+			if err := json.Unmarshal(data, &tokens); err == nil && (tokens.Charging != "" || tokens.Climate != "" || tokens.PushToStartClimate != "" || len(tokens.KnownClimateTokens) > 0) {
 				a.tokens = tokens
-				log.Infof("[APNs] Loaded stored push tokens from %s", p)
+				if a.knownClimateTokens == nil {
+					a.knownClimateTokens = make(map[string]time.Time)
+				}
+				for _, t := range tokens.KnownClimateTokens {
+					if t != "" {
+						a.knownClimateTokens[t] = time.Now()
+					}
+				}
+				if tokens.Climate != "" {
+					a.knownClimateTokens[tokens.Climate] = time.Now()
+				}
+				log.Infof("[APNs] Loaded stored push tokens from %s (%d known climate tokens)", p, len(a.knownClimateTokens))
 				break
 			}
 		}
@@ -193,6 +211,16 @@ func (a *APNsClient) loadTokens() {
 }
 
 func (a *APNsClient) saveTokens() {
+	if a.knownClimateTokens != nil {
+		var list []string
+		for t := range a.knownClimateTokens {
+			if t != "" {
+				list = append(list, t)
+			}
+		}
+		a.tokens.KnownClimateTokens = list
+	}
+
 	data, err := json.MarshalIndent(a.tokens, "", "  ")
 	if err != nil {
 		return
@@ -211,9 +239,12 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	if a.knownClimateTokens == nil {
+		a.knownClimateTokens = make(map[string]time.Time)
+	}
 
 	changed := false
+	var shouldDismissClimate bool
 	normalizedType := strings.TrimSuffix(strings.ToLower(tokenType), "_token")
 	switch normalizedType {
 	case "charging":
@@ -222,9 +253,14 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 			changed = true
 		}
 	case "climate":
+		a.knownClimateTokens[token] = time.Now()
 		if a.tokens.Climate != token {
 			a.tokens.Climate = token
 			changed = true
+		}
+		// If climate is currently OFF or ending, dismiss this token immediately
+		if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
+			shouldDismissClimate = true
 		}
 	case "push_to_start_charging", "push_to_start":
 		if a.tokens.PushToStartCharging != token {
@@ -245,8 +281,12 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 				changed = true
 			}
 			if v, ok := parsed["climate"]; ok && v != "" {
+				a.knownClimateTokens[v] = time.Now()
 				a.tokens.Climate = v
 				changed = true
+				if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
+					shouldDismissClimate = true
+				}
 			}
 		}
 	}
@@ -254,6 +294,12 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	if changed {
 		a.saveTokens()
 		log.Infof("[APNs] Updated and persisted %s push token: %s", tokenType, token)
+	}
+	a.mu.Unlock()
+
+	if shouldDismissClimate {
+		log.Infof("[APNs] Climate token received while climate is off/ending (%.16s...), sending immediate dismissal", token)
+		go a.sendEndClimateToToken(token)
 	}
 }
 
@@ -557,6 +603,12 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		return
 	}
 
+	// Reset pending dismissal when climate becomes active
+	if isActive {
+		a.climatePendingEnd = false
+		a.climatePendingEndAt = time.Time{}
+	}
+
 	// New session if state transitioned to active or if we have no activity token yet
 	isNewSession := (!a.lastClimateState && isActive) || (isActive && a.tokens.Climate == "")
 	if isNewSession || a.climateSessionStart.IsZero() {
@@ -643,29 +695,44 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	}()
 }
 
-// EndClimate dismisses the climate Live Activity
+// EndClimate dismisses the climate Live Activity across all known and incoming tokens
 func (a *APNsClient) EndClimate(mode string, modeName string) {
 	if a.privateKey == nil {
 		return
 	}
 
 	a.mu.Lock()
-	if !a.lastClimateState && a.tokens.Climate == "" {
-		a.mu.Unlock()
-		return
-	}
 	a.lastClimateState = false
 	a.lastClimateMode = "off"
 	a.lastClimateRem = 0
 	a.climateSessionStart = time.Time{}
+	a.climatePendingEnd = true
+	a.climatePendingEndAt = time.Now().Add(5 * time.Minute)
 
-	token := a.tokens.Climate
-	a.tokens.Climate = "" // Clear token so next session starts fresh
-	a.saveTokens()
+	tokensToDismiss := make(map[string]bool)
+	if a.tokens.Climate != "" {
+		tokensToDismiss[a.tokens.Climate] = true
+	}
+	for t := range a.knownClimateTokens {
+		if t != "" {
+			tokensToDismiss[t] = true
+		}
+	}
 	a.mu.Unlock()
 
-	if token == "" {
-		log.Infof("[APNs] EndClimate: No active climate activity token to dismiss")
+	if len(tokensToDismiss) == 0 {
+		log.Infof("[APNs] EndClimate: No active climate activity token to dismiss yet; armed climatePendingEnd=true for incoming tokens")
+		return
+	}
+
+	log.Infof("[APNs] EndClimate: Dismissing %d climate token(s)", len(tokensToDismiss))
+	for t := range tokensToDismiss {
+		go a.sendEndClimateToToken(t)
+	}
+}
+
+func (a *APNsClient) sendEndClimateToToken(token string) {
+	if a.privateKey == nil || token == "" {
 		return
 	}
 
@@ -676,8 +743,8 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 			"event":          "end",
 			"dismissal-date": now,
 			"content-state": map[string]interface{}{
-				"mode":          mode,
-				"modeName":      modeName,
+				"mode":          "off",
+				"modeName":      "Klíma leállt",
 				"remainingMins": 0,
 				"duration":      10,
 				"stopTime":      "--:--",
@@ -691,9 +758,9 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 
 	data, _ := json.Marshal(payloadMap)
 	log.Infof("[APNs] Sending climate end push (token=%.16s...)", token)
-	go func(t string) {
-		if err := a.sendPush(t, data); err != nil {
-			log.Warnf("[APNs] Failed to send climate end push: %v", err)
-		}
-	}(token)
+	if err := a.sendPush(token, data); err != nil {
+		log.Warnf("[APNs] Failed to send climate end push to %.16s: %v", token, err)
+	} else {
+		log.Infof("[APNs] Climate end push delivered successfully (token=%.16s...)", token)
+	}
 }
