@@ -820,6 +820,15 @@ func (m *mqttClient) handleIncomingMqtt(mqttClientConn mqtt.Client, msg mqtt.Mes
 
 	cl := m.getPhev()
 	if cl == nil || cl.IsClosed() {
+		// Allow climate off commands even if vehicle WiFi is disconnected
+		if strings.HasPrefix(relTopic, "/set/climate") {
+			lower := strings.ToLower(payloadStr)
+			if lower == "off" || lower == "0" || lower == "false" || relTopic == "/set/climate/off" {
+				log.Infof("Vehicle is disconnected, but processing climate OFF command directly on %s", fullTopic)
+				m.handleImmediateClimateTopic(nil, strings.TrimPrefix(relTopic, "/set/climate/"), payloadStr)
+				return
+			}
+		}
 		log.Warnf("Cannot execute command on %s: vehicle is not connected", fullTopic)
 		return
 	}
@@ -1196,12 +1205,13 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 	for t, p := range states {
 		m.publish(t, p)
 	}
-	if mode == 0x00 && m.apns != nil {
-		m.apns.EndClimate("off", "Kikapcsolva")
-	}
+	m.syncClimateAPNs(states)
 }
 
 func (m *mqttClient) sendImmediateClimate(cl *client.Client, mode, durIdx, delayIdx byte) {
+	if cl == nil {
+		return
+	}
 	if cl.ModelYear == client.ModelYear14 {
 		m.mu.RLock()
 		reg22 := append([]byte(nil), m.my14Reg22...)
@@ -1519,6 +1529,34 @@ func (m *mqttClient) handlePhev() error {
 	defer func() {
 		_ = phev.Close()
 		m.clearPhevIfMatch(phev)
+
+		m.mu.Lock()
+		wasOperating := m.climate.operating || (m.climate.state != nil && *m.climate.state == protocol.PreACOn)
+		var states map[string]string
+		if wasOperating {
+			offStr := "off"
+			termState := protocol.PreACOff
+			m.climate.mode = &offStr
+			m.climate.state = &termState
+			m.climate.operating = false
+			m.climate.delayPending = false
+			m.climate.manualSession = false
+			m.climate.selectedDuration = 0
+			m.climate.operatingStartTime = time.Time{}
+			m.climate.targetStopTime = time.Time{}
+			m.climate.stopTime = "--:--"
+			states = m.climate.mqttStates()
+		}
+		m.mu.Unlock()
+
+		if wasOperating {
+			for t, p := range states {
+				m.publish(t, p)
+			}
+			if m.apns != nil {
+				m.apns.EndClimate("off", "Kapcsolat megszakadt")
+			}
+		}
 	}()
 
 	if err := phev.Connect(); err != nil {

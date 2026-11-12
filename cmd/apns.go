@@ -535,7 +535,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		if startToken != "" {
 			targetToken = startToken
 			event = "start"
-		} else {
+		} else if token != "" {
 			targetToken = token
 			event = "start"
 		}
@@ -653,9 +653,7 @@ func (a *APNsClient) EndCharging(soc int) {
 	if token != "" {
 		tokensToSend = append(tokensToSend, token)
 	}
-	if startToken != "" && startToken != token {
-		tokensToSend = append(tokensToSend, startToken)
-	}
+	// Note: Push-to-start tokens only accept "start" events, never send "end" to startToken!
 
 	if len(tokensToSend) == 0 {
 		log.Infof("[APNs] EndCharging: No charging token registered to send end push")
@@ -753,19 +751,20 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	var targetToken string
 	var event string
 	if isNewSession {
-		if token != "" {
-			// Live Activity already started locally on device; send update to sync state
-			targetToken = token
-			event = "update"
-		} else if startToken != "" {
-			// No local Live Activity on device; launch remotely via APNs Push-To-Start
+		if startToken != "" {
 			targetToken = startToken
 			event = "start"
+		} else if token != "" {
+			targetToken = token
+			event = "update"
 		}
 	} else {
 		if token != "" {
 			targetToken = token
 			event = "update"
+		} else if startToken != "" {
+			targetToken = startToken
+			event = "start"
 		} else {
 			log.Debugf("[APNs] UpdateClimate: Active push-to-start session in progress, no client update token yet; waiting")
 			a.mu.Unlock()
