@@ -386,8 +386,6 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		if startToken != "" {
 			targetToken = startToken
 			event = "start"
-			a.tokens.Charging = ""
-			a.saveTokens()
 		} else {
 			targetToken = token
 			event = "start"
@@ -437,6 +435,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander PHEV",
 		}
+		payloadMap["aps"].(map[string]interface{})["input-push-token"] = 1
 		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
 			"title": "Töltés elindult",
 			"body":  fmt.Sprintf("Akkumulátor: %d%% (%d perc van hátra)", soc, remainingMins),
@@ -495,7 +494,7 @@ func (a *APNsClient) EndCharging(soc int) {
 		"aps": map[string]interface{}{
 			"timestamp":      now,
 			"event":          "end",
-			"dismissal-date": now,
+			"dismissal-date": 0,
 			"content-state": map[string]interface{}{
 				"soc":            soc,
 				"remainingMins":  0,
@@ -548,8 +547,6 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		if startToken != "" {
 			targetToken = startToken
 			event = "start"
-			a.tokens.Climate = ""
-			a.saveTokens()
 		} else {
 			targetToken = token
 			event = "start"
@@ -598,6 +595,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander Klíma",
 		}
+		payloadMap["aps"].(map[string]interface{})["input-push-token"] = 1
 		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
 			"title": modeName,
 			"body":  fmt.Sprintf("Időtartam: %d perc (Leállás: ~%s)", duration, stopTime),
@@ -657,7 +655,7 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 		"aps": map[string]interface{}{
 			"timestamp":      now,
 			"event":          "end",
-			"dismissal-date": now,
+			"dismissal-date": 0,
 			"content-state": map[string]interface{}{
 				"mode":          mode,
 				"modeName":      modeName,
