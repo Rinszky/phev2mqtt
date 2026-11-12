@@ -237,12 +237,6 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	normalizedType := strings.TrimSuffix(strings.ToLower(tokenType), "_token")
 
 	if token == "" {
-		a.mu.Lock()
-		if normalizedType == "climate" {
-			a.tokens.Climate = ""
-			a.saveTokens()
-		}
-		a.mu.Unlock()
 		return
 	}
 
@@ -616,8 +610,8 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		a.climatePendingEndAt = time.Time{}
 	}
 
-	// New session if state transitioned to active or if we have no activity token yet
-	isNewSession := (!a.lastClimateState && isActive) || (isActive && a.tokens.Climate == "")
+	// New session ONLY if state transitioned from false to true
+	isNewSession := !a.lastClimateState && isActive
 	if isNewSession || a.climateSessionStart.IsZero() {
 		a.climateSessionStart = now
 	}
@@ -644,7 +638,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 			targetToken = token
 			event = "update"
 		} else {
-			log.Debugf("[APNs] UpdateClimate: No active activity push token yet, waiting for client token registration")
+			log.Debugf("[APNs] UpdateClimate: Active push-to-start session in progress, no client update token yet; waiting")
 			a.mu.Unlock()
 			return
 		}
@@ -688,7 +682,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander Klíma",
 		}
-		payloadMap["aps"].(map[string]interface{})["input-push-token"] = 1
+		payloadMap["aps"].(map[string]interface{})["stale-date"] = endDate
 		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
 			"title": modeName,
 			"body":  fmt.Sprintf("Időtartam: %d perc (Leállás: ~%s)", duration, stopTime),
