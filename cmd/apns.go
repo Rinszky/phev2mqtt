@@ -253,7 +253,6 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 
 	changed := false
 	var shouldDismissClimate bool
-	normalizedType := strings.TrimSuffix(strings.ToLower(tokenType), "_token")
 	switch normalizedType {
 	case "charging":
 		if a.tokens.Charging != token {
