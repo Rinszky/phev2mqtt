@@ -380,9 +380,6 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 	a.lastChargingRem = remainingMins
 	a.lastChargingState = isCharging
 
-	token := a.tokens.Charging
-	startToken := a.tokens.PushToStartCharging
-
 	var targetToken string
 	var event string
 	if isNewSession {
@@ -544,9 +541,6 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	a.lastClimateMode = mode
 	a.lastClimateRem = remainingMins
 	a.lastClimateState = isActive
-
-	token := a.tokens.Climate
-	startToken := a.tokens.PushToStartClimate
 
 	var targetToken string
 	var event string
