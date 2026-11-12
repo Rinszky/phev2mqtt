@@ -71,6 +71,7 @@ type climate struct {
 	stopTime           string
 	delayStartTime     time.Time
 	operatingStartTime time.Time
+	targetStopTime     time.Time
 	schedule           *protocol.ClimateSchedule
 }
 
@@ -134,10 +135,13 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 			c.operatingStartTime = time.Now()
 		}
 	} else if !c.delayPending {
-		if c.operatingStartTime.IsZero() || time.Since(c.operatingStartTime) > 30*time.Second {
-			c.operatingStartTime = time.Time{}
-			c.delayStartTime = time.Time{}
-			c.manualSession = false
+		if st == protocol.PreACOff || st == protocol.PreACTerminated {
+			if time.Since(c.operatingStartTime) > 15*time.Second {
+				c.operatingStartTime = time.Time{}
+				c.targetStopTime = time.Time{}
+				c.delayStartTime = time.Time{}
+				c.manualSession = false
+			}
 		}
 	}
 	c.updateTiming(time.Now())
@@ -159,9 +163,12 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 			c.operatingStartTime = time.Now()
 		}
 	} else if !reg.DelayPending {
-		if c.operatingStartTime.IsZero() || time.Since(c.operatingStartTime) > 30*time.Second {
-			c.operatingStartTime = time.Time{}
-			c.manualSession = false
+		if !reg.Operating && (c.state == nil || *c.state == protocol.PreACOff || *c.state == protocol.PreACTerminated) {
+			if time.Since(c.operatingStartTime) > 15*time.Second {
+				c.operatingStartTime = time.Time{}
+				c.targetStopTime = time.Time{}
+				c.manualSession = false
+			}
 		}
 	}
 
@@ -208,6 +215,7 @@ func (c *climate) updateTiming(now time.Time) {
 	isOperating := c.operating || (c.state != nil && *c.state == protocol.PreACOn)
 	if !isOperating && !c.delayPending {
 		c.stopTime = "--:--"
+		c.targetStopTime = time.Time{}
 		return
 	}
 
@@ -219,8 +227,8 @@ func (c *climate) updateTiming(now time.Time) {
 		if !c.delayStartTime.IsZero() {
 			refTime = c.delayStartTime
 		}
-		targetStop := refTime.Add(time.Duration(totalMin) * time.Minute)
-		c.stopTime = targetStop.Format("15:04")
+		c.targetStopTime = refTime.Add(time.Duration(totalMin) * time.Minute)
+		c.stopTime = c.targetStopTime.Format("15:04")
 		return
 	}
 
@@ -232,19 +240,22 @@ func (c *climate) updateTiming(now time.Time) {
 			} else if start.Before(now.Add(-18 * time.Hour)) {
 				start = start.Add(24 * time.Hour)
 			}
-			targetStop := start.Add(time.Duration(dur) * time.Minute)
-			c.stopTime = targetStop.Format("15:04")
+			c.targetStopTime = start.Add(time.Duration(dur) * time.Minute)
+			c.stopTime = c.targetStopTime.Format("15:04")
 			return
 		}
 		if c.operatingStartTime.IsZero() {
 			c.operatingStartTime = now
 		}
-		targetStop := c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
-		c.stopTime = targetStop.Format("15:04")
+		if c.targetStopTime.IsZero() {
+			c.targetStopTime = c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
+		}
+		c.stopTime = c.targetStopTime.Format("15:04")
 		return
 	}
 
 	c.stopTime = "--:--"
+	c.targetStopTime = time.Time{}
 }
 
 // remainingAndCompletion returns remaining minutes and RFC3339 completion timestamp.
@@ -254,39 +265,14 @@ func (c *climate) remainingAndCompletion(now time.Time) (int, string) {
 		return 0, "none"
 	}
 
-	dur := c.activeDuration()
-	var targetStop time.Time
+	c.updateTiming(now)
 
-	if c.delayPending {
-		totalMin := c.selectedDelay + dur
-		refTime := now
-		if !c.delayStartTime.IsZero() {
-			refTime = c.delayStartTime
-		}
-		targetStop = refTime.Add(time.Duration(totalMin) * time.Minute)
-	} else if isOperating {
-		if c.isScheduledSession(now) {
-			start := time.Date(now.Year(), now.Month(), now.Day(), c.startHour, c.startMinute, 0, 0, now.Location())
-			if start.After(now.Add(6 * time.Hour)) {
-				start = start.Add(-24 * time.Hour)
-			} else if start.Before(now.Add(-18 * time.Hour)) {
-				start = start.Add(24 * time.Hour)
-			}
-			targetStop = start.Add(time.Duration(dur) * time.Minute)
-		} else {
-			if c.operatingStartTime.IsZero() {
-				c.operatingStartTime = now
-			}
-			targetStop = c.operatingStartTime.Add(time.Duration(dur) * time.Minute)
-		}
-	}
-
-	diff := targetStop.Sub(now)
+	diff := c.targetStopTime.Sub(now)
 	remMin := 0
 	if diff > 0 {
 		remMin = int((diff + 59*time.Second) / time.Minute)
 	}
-	return remMin, targetStop.Truncate(time.Minute).Format(time.RFC3339)
+	return remMin, c.targetStopTime.Truncate(time.Minute).Format(time.RFC3339)
 }
 
 func (c *climate) mqttStates() map[string]string {
@@ -1124,9 +1110,14 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 		m.climate.manualSession = true
 		m.climate.selectedDuration = durMin
 		m.climate.operatingStartTime = time.Now()
+		m.climate.targetStopTime = m.climate.operatingStartTime.Add(time.Duration(durMin) * time.Minute)
+		m.climate.stopTime = m.climate.targetStopTime.Format("15:04")
 	} else {
 		m.climate.manualSession = false
 		m.climate.selectedDuration = 0
+		m.climate.operatingStartTime = time.Time{}
+		m.climate.targetStopTime = time.Time{}
+		m.climate.stopTime = "--:--"
 		if m.apns != nil {
 			m.apns.EndClimate("off", "Kikapcsolva")
 		}
