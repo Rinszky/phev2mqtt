@@ -178,13 +178,14 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	defer a.mu.Unlock()
 
 	changed := false
-	switch strings.ToLower(tokenType) {
-	case "charging", "charging_token":
+	normalizedType := strings.TrimSuffix(strings.ToLower(tokenType), "_token")
+	switch normalizedType {
+	case "charging":
 		if a.tokens.Charging != token {
 			a.tokens.Charging = token
 			changed = true
 		}
-	case "climate", "climate_token":
+	case "climate":
 		if a.tokens.Climate != token {
 			a.tokens.Climate = token
 			changed = true
