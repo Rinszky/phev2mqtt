@@ -1095,25 +1095,16 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 	}
 
 	m.sendImmediateClimate(cl, mode, durIdx, delayIdx)
-	if m.apns != nil {
-		if mode != 0x00 {
-			modeStr := "heat"
-			modeName := "Előfűtés"
-			switch mode {
-			case 0x01:
-				modeStr = "cool"
-				modeName = "Előhűtés"
-			case 0x03:
-				modeStr = "windscreen"
-				modeName = "Szélvédő fűtés"
-			}
-			stopTime := time.Now().Add(time.Duration(durMin) * time.Minute).Format("15:04")
-			log.Infof("[APNs] Immediate climate command dispatched: %s (%d min, stop=%s)", modeStr, durMin, stopTime)
-			m.apns.UpdateClimate(modeStr, modeName, durMin, durMin, stopTime, true)
-		} else {
+	m.mu.Lock()
+	if mode != 0x00 {
+		m.climate.selectedDuration = durMin
+	} else {
+		m.climate.selectedDuration = 0
+		if m.apns != nil {
 			m.apns.EndClimate("off", "Kikapcsolva")
 		}
 	}
+	m.mu.Unlock()
 }
 
 func (m *mqttClient) sendImmediateClimate(cl *client.Client, mode, durIdx, delayIdx byte) {
