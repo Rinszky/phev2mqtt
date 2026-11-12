@@ -480,6 +480,27 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 	return lastErr
 }
 
+func cleanTimeFormat(t string) string {
+	t = strings.TrimSpace(strings.TrimPrefix(t, "~"))
+	if t == "" || t == "--:--" || t == "none" || t == "unknown" {
+		return ""
+	}
+	if strings.Contains(t, "T") {
+		if parsed, err := time.Parse(time.RFC3339, t); err == nil {
+			return parsed.In(time.Local).Format("15:04")
+		}
+		parts := strings.Split(t, "T")
+		if len(parts) == 2 {
+			timePart := parts[1]
+			timeParts := strings.Split(timePart, ":")
+			if len(timeParts) >= 2 {
+				return fmt.Sprintf("%02s:%02s", timeParts[0], timeParts[1])
+			}
+		}
+	}
+	return t
+}
+
 // UpdateCharging sends a Live Activity update for battery charging
 func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime string, isCharging bool) {
 	if a.privateKey == nil && a.fcm == nil {
@@ -564,6 +585,8 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		endDate = startDate
 	}
 
+	cleanCompTime := cleanTimeFormat(completionTime)
+
 	payloadMap := map[string]interface{}{
 		"aps": map[string]interface{}{
 			"timestamp": startDate,
@@ -571,7 +594,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 			"content-state": map[string]interface{}{
 				"soc":            soc,
 				"remainingMins":  remainingMins,
-				"completionTime": completionTime,
+				"completionTime": cleanCompTime,
 				"isCharging":     isCharging,
 				"lang":           "hu",
 				"startDate":      startDate,
@@ -590,11 +613,6 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 			"title": "Töltés elindult",
 			"body":  fmt.Sprintf("Akkumulátor: %d%% (%d perc van hátra)", soc, remainingMins),
 			"sound": "default",
-		}
-	} else {
-		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
-			"title": "Töltés folyamatban",
-			"body":  fmt.Sprintf("Akkumulátor: %d%% (%d perc van hátra)", soc, remainingMins),
 		}
 	}
 
