@@ -402,7 +402,7 @@ func formatSignature(r, s *big.Int) []byte {
 	return sig
 }
 
-func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
+func (a *APNsClient) sendPush(deviceToken string, payload []byte, priority int) error {
 	jwt, err := a.generateJWT()
 	if err != nil {
 		return err
@@ -425,6 +425,10 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 	topic := a.bundleID + ".push-type.liveactivity"
 	var lastErr error
 
+	if priority <= 0 {
+		priority = 10
+	}
+
 	for _, baseURL := range endpoints {
 		url := baseURL + deviceToken
 		req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
@@ -435,7 +439,7 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 		req.Header.Set("Authorization", "bearer "+jwt)
 		req.Header.Set("apns-topic", topic)
 		req.Header.Set("apns-push-type", "liveactivity")
-		req.Header.Set("apns-priority", "10")
+		req.Header.Set("apns-priority", fmt.Sprintf("%d", priority))
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 		resp, err := a.httpClient.Do(req)
@@ -525,6 +529,8 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 	a.lastChargingRem = remainingMins
 	a.lastChargingState = isCharging
 
+	cleanCompTime := cleanTimeFormat(completionTime)
+
 	// Send to FCM Android devices
 	if a.fcm != nil {
 		fcmTokens := make(map[string]bool)
@@ -538,7 +544,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		}
 		for tok := range fcmTokens {
 			go func(target string) {
-				if err := a.fcm.UpdateCharging(target, soc, remainingMins, completionTime); err != nil {
+				if err := a.fcm.UpdateCharging(target, soc, remainingMins, cleanCompTime); err != nil {
 					log.Warnf("[FCM] Failed to send charging update push: %v", err)
 				}
 			}(tok)
@@ -585,8 +591,6 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		endDate = startDate
 	}
 
-	cleanCompTime := cleanTimeFormat(completionTime)
-
 	payloadMap := map[string]interface{}{
 		"aps": map[string]interface{}{
 			"timestamp": startDate,
@@ -603,7 +607,9 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		},
 	}
 
+	pushPriority := 5
 	if event == "start" {
+		pushPriority = 10
 		payloadMap["aps"].(map[string]interface{})["attributes-type"] = "ChargingActivityAttributes"
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander PHEV",
@@ -618,7 +624,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 
 	data, _ := json.Marshal(payloadMap)
 	go func() {
-		if err := a.sendPush(targetToken, data); err != nil {
+		if err := a.sendPush(targetToken, data, pushPriority); err != nil {
 			log.Warnf("[APNs] Failed to send charging push: %v", err)
 		}
 	}()
@@ -699,7 +705,7 @@ func (a *APNsClient) EndCharging(soc int) {
 	for _, t := range tokensToSend {
 		log.Infof("[APNs] Sending charging end push (token=%.16s...)", t)
 		go func(target string) {
-			if err := a.sendPush(target, data); err != nil {
+			if err := a.sendPush(target, data, 10); err != nil {
 				log.Warnf("[APNs] Failed to send charging end push: %v", err)
 			}
 		}(t)
@@ -822,7 +828,9 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		},
 	}
 
+	pushPriority := 5
 	if event == "start" {
+		pushPriority = 10
 		payloadMap["aps"].(map[string]interface{})["attributes-type"] = "ClimateActivityAttributes"
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander Klíma",
@@ -837,7 +845,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 
 	data, _ := json.Marshal(payloadMap)
 	go func() {
-		if err := a.sendPush(targetToken, data); err != nil {
+		if err := a.sendPush(targetToken, data, pushPriority); err != nil {
 			log.Warnf("[APNs] Failed to send climate push: %v", err)
 		}
 	}()
@@ -936,7 +944,7 @@ func (a *APNsClient) sendEndClimateToToken(token string) {
 
 	data, _ := json.Marshal(payloadMap)
 	log.Infof("[APNs] Sending climate end push (token=%.16s...)", token)
-	if err := a.sendPush(token, data); err != nil {
+	if err := a.sendPush(token, data, 10); err != nil {
 		log.Warnf("[APNs] Failed to send climate end push to %.16s: %v", token, err)
 	} else {
 		log.Infof("[APNs] Climate end push delivered successfully (token=%.16s...)", token)
