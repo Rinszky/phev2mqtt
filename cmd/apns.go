@@ -448,13 +448,27 @@ func (a *APNsClient) EndCharging(soc int) {
 	}
 
 	a.mu.Lock()
-	token := a.tokens.Charging
+	if !a.lastChargingState {
+		a.mu.Unlock()
+		return
+	}
 	a.lastChargingState = false
-	a.tokens.Charging = ""
-	a.saveTokens()
+	a.lastChargingRem = 0
+
+	token := a.tokens.Charging
+	startToken := a.tokens.PushToStartCharging
 	a.mu.Unlock()
 
-	if token == "" {
+	tokensToSend := []string{}
+	if token != "" {
+		tokensToSend = append(tokensToSend, token)
+	}
+	if startToken != "" && startToken != token {
+		tokensToSend = append(tokensToSend, startToken)
+	}
+
+	if len(tokensToSend) == 0 {
+		log.Infof("[APNs] EndCharging: No charging token registered to send end push")
 		return
 	}
 
@@ -477,11 +491,14 @@ func (a *APNsClient) EndCharging(soc int) {
 	}
 
 	data, _ := json.Marshal(payloadMap)
-	go func() {
-		if err := a.sendPush(token, data); err != nil {
-			log.Warnf("[APNs] Failed to send charging end push: %v", err)
-		}
-	}()
+	for _, t := range tokensToSend {
+		log.Infof("[APNs] Sending charging end push (token=%.16s...)", t)
+		go func(target string) {
+			if err := a.sendPush(target, data); err != nil {
+				log.Warnf("[APNs] Failed to send charging end push: %v", err)
+			}
+		}(t)
+	}
 }
 
 // UpdateClimate sends a Live Activity update for HVAC / preconditioning
@@ -574,13 +591,28 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	}
 
 	a.mu.Lock()
-	token := a.tokens.Climate
+	if !a.lastClimateState {
+		a.mu.Unlock()
+		return
+	}
 	a.lastClimateState = false
-	a.tokens.Climate = ""
-	a.saveTokens()
+	a.lastClimateMode = "off"
+	a.lastClimateRem = 0
+
+	token := a.tokens.Climate
+	startToken := a.tokens.PushToStartClimate
 	a.mu.Unlock()
 
-	if token == "" {
+	tokensToSend := []string{}
+	if token != "" {
+		tokensToSend = append(tokensToSend, token)
+	}
+	if startToken != "" && startToken != token {
+		tokensToSend = append(tokensToSend, startToken)
+	}
+
+	if len(tokensToSend) == 0 {
+		log.Infof("[APNs] EndClimate: No climate token registered to send end push")
 		return
 	}
 
@@ -605,9 +637,12 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	}
 
 	data, _ := json.Marshal(payloadMap)
-	go func() {
-		if err := a.sendPush(token, data); err != nil {
-			log.Warnf("[APNs] Failed to send climate end push: %v", err)
-		}
-	}()
+	for _, t := range tokensToSend {
+		log.Infof("[APNs] Sending climate end push (token=%.16s...)", t)
+		go func(target string) {
+			if err := a.sendPush(target, data); err != nil {
+				log.Warnf("[APNs] Failed to send climate end push: %v", err)
+			}
+		}(t)
+	}
 }
