@@ -472,8 +472,6 @@ func (a *APNsClient) EndCharging(soc int) {
 
 	token := a.tokens.Charging
 	startToken := a.tokens.PushToStartCharging
-	a.tokens.Charging = ""
-	a.saveTokens()
 	a.mu.Unlock()
 
 	tokensToSend := []string{}
@@ -633,8 +631,6 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 
 	token := a.tokens.Climate
 	startToken := a.tokens.PushToStartClimate
-	a.tokens.Climate = ""
-	a.saveTokens()
 	a.mu.Unlock()
 
 	tokensToSend := []string{}
