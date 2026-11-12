@@ -106,7 +106,7 @@ func newClimateTracker(sched ...*protocol.ClimateSchedule) *climate {
 
 func (c *climate) setMode(m string, dur uint8) {
 	c.mode = &m
-	if dur == 10 || dur == 20 || dur == 30 {
+	if c.selectedDuration == 0 && (dur == 10 || dur == 20 || dur == 30) {
 		c.selectedDuration = int(dur)
 	}
 }
@@ -129,12 +129,16 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 	}
 
 	isOp := c.operating || st == protocol.PreACOn
-	if isOp && c.operatingStartTime.IsZero() {
-		c.operatingStartTime = time.Now()
-	} else if !isOp && !c.delayPending {
-		c.operatingStartTime = time.Time{}
-		c.delayStartTime = time.Time{}
-		c.manualSession = false
+	if isOp {
+		if c.operatingStartTime.IsZero() {
+			c.operatingStartTime = time.Now()
+		}
+	} else if !c.delayPending {
+		if c.operatingStartTime.IsZero() || time.Since(c.operatingStartTime) > 30*time.Second {
+			c.operatingStartTime = time.Time{}
+			c.delayStartTime = time.Time{}
+			c.manualSession = false
+		}
 	}
 	c.updateTiming(time.Now())
 }
@@ -150,14 +154,18 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 	c.delayPending = reg.DelayPending
 
 	isOp := reg.Operating || (c.state != nil && *c.state == protocol.PreACOn)
-	if isOp && c.operatingStartTime.IsZero() {
-		c.operatingStartTime = time.Now()
-	} else if !isOp && !c.delayPending {
-		c.operatingStartTime = time.Time{}
-		c.manualSession = false
+	if isOp {
+		if c.operatingStartTime.IsZero() {
+			c.operatingStartTime = time.Now()
+		}
+	} else if !reg.DelayPending {
+		if c.operatingStartTime.IsZero() || time.Since(c.operatingStartTime) > 30*time.Second {
+			c.operatingStartTime = time.Time{}
+			c.manualSession = false
+		}
 	}
 
-	if !c.manualSession && (reg.Duration == 10 || reg.Duration == 20 || reg.Duration == 30) {
+	if !c.manualSession && c.selectedDuration == 0 && (reg.Duration == 10 || reg.Duration == 20 || reg.Duration == 30) {
 		c.selectedDuration = reg.Duration
 	}
 	if reg.Delay == 0 || reg.Delay == 5 || reg.Delay == 10 {
@@ -354,13 +362,15 @@ func (c *climate) mqttStates() map[string]string {
 		return m
 	}
 
-	switch activeMode {
-	case "cool":
-		m["/climate/cool"] = "on"
-	case "heat":
-		m["/climate/heat"] = "on"
-	case "windscreen":
-		m["/climate/windscreen"] = "on"
+	if isOperating {
+		switch activeMode {
+		case "cool":
+			m["/climate/cool"] = "on"
+		case "heat":
+			m["/climate/heat"] = "on"
+		case "windscreen":
+			m["/climate/windscreen"] = "on"
+		}
 	}
 	return m
 }
@@ -2910,21 +2920,19 @@ func (m *mqttClient) syncClimateAPNs(states map[string]string) {
 	if m.apns == nil {
 		return
 	}
-	isOperating := strings.EqualFold(states["/climate/operating"], "on") ||
-		strings.EqualFold(states["/climate/heat"], "on") ||
-		strings.EqualFold(states["/climate/cool"], "on") ||
-		strings.EqualFold(states["/climate/windscreen"], "on") ||
-		(states["/climate/mode"] != "" && states["/climate/mode"] != "off")
+	isOperating := strings.EqualFold(states["/climate/operating"], "on")
+	if !isOperating {
+		m.apns.EndClimate("off", "Kikapcsolva")
+		return
+	}
 
 	mode := states["/climate/mode"]
 	if mode == "" || mode == "off" {
-		if strings.EqualFold(states["/climate/heat"], "on") {
-			mode = "heat"
-		} else if strings.EqualFold(states["/climate/cool"], "on") {
+		if strings.EqualFold(states["/climate/cool"], "on") {
 			mode = "cool"
 		} else if strings.EqualFold(states["/climate/windscreen"], "on") {
 			mode = "windscreen"
-		} else if isOperating {
+		} else {
 			mode = "heat"
 		}
 	}
@@ -2936,7 +2944,7 @@ func (m *mqttClient) syncClimateAPNs(states map[string]string) {
 	if dur <= 0 {
 		dur = 10
 	}
-	if rem <= 0 && isOperating {
+	if rem <= 0 {
 		rem = dur
 	}
 	stopTime := states["/climate/stop_time"]
@@ -2952,12 +2960,8 @@ func (m *mqttClient) syncClimateAPNs(states map[string]string) {
 		modeName = "Szélvédő fűtés"
 	}
 
-	if isOperating {
-		log.Infof("[APNs] syncClimateAPNs: Climate is active (mode=%s, rem=%d, dur=%d, stop=%s), triggering APNs push", mode, rem, dur, stopTime)
-		m.apns.UpdateClimate(mode, modeName, rem, dur, stopTime, true)
-	} else {
-		m.apns.EndClimate(mode, modeName)
-	}
+	log.Infof("[APNs] syncClimateAPNs: Climate is active (mode=%s, rem=%d, dur=%d, stop=%s), triggering APNs push", mode, rem, dur, stopTime)
+	m.apns.UpdateClimate(mode, modeName, rem, dur, stopTime, true)
 }
 
 func init() {
