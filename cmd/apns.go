@@ -122,7 +122,21 @@ func newAPNsClient() *APNsClient {
 		log.Errorf("[APNs] CRITICAL: No APNs .p8 key file found! Checked in current dir, /etc/phev2mqtt, /home/rinszky/phev2mqtt. APNs Live Activities cannot be sent!")
 	}
 
+	searchDirs := []string{
+		"/etc/phev2mqtt",
+		"/home/rinszky/phev2mqtt",
+		"/home/rinszky",
+		".",
+	}
 	tokenFile := filepath.Join(os.TempDir(), "phev_apns_tokens.json")
+	for _, dir := range searchDirs {
+		candidate := filepath.Join(dir, "apns_tokens.json")
+		if _, err := os.Stat(dir); err == nil {
+			tokenFile = candidate
+			break
+		}
+	}
+
 	client := &APNsClient{
 		privateKey:        privateKey,
 		keyID:             keyID,
@@ -163,12 +177,16 @@ func (a *APNsClient) loadTokens() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	data, err := os.ReadFile(a.tokenFilePath)
-	if err == nil {
-		var tokens APNsTokens
-		if err := json.Unmarshal(data, &tokens); err == nil {
-			a.tokens = tokens
-			log.Infof("[APNs] Loaded stored push tokens from %s", a.tokenFilePath)
+	paths := []string{a.tokenFilePath, filepath.Join(os.TempDir(), "phev_apns_tokens.json")}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			var tokens APNsTokens
+			if err := json.Unmarshal(data, &tokens); err == nil && (tokens.Charging != "" || tokens.Climate != "" || tokens.PushToStartClimate != "") {
+				a.tokens = tokens
+				log.Infof("[APNs] Loaded stored push tokens from %s", p)
+				break
+			}
 		}
 	}
 }
@@ -179,6 +197,10 @@ func (a *APNsClient) saveTokens() {
 		return
 	}
 	_ = os.WriteFile(a.tokenFilePath, data, 0600)
+	tmpPath := filepath.Join(os.TempDir(), "phev_apns_tokens.json")
+	if a.tokenFilePath != tmpPath {
+		_ = os.WriteFile(tmpPath, data, 0600)
+	}
 }
 
 func (a *APNsClient) SetToken(tokenType string, token string) {
@@ -394,9 +416,10 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		if token != "" {
 			targetToken = token
 			event = "update"
-		} else if startToken != "" {
-			targetToken = startToken
-			event = "update"
+		} else {
+			log.Debugf("[APNs] UpdateCharging: No active activity push token yet, waiting for client token registration")
+			a.mu.Unlock()
+			return
 		}
 	}
 	a.mu.Unlock()
@@ -553,9 +576,10 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		if token != "" {
 			targetToken = token
 			event = "update"
-		} else if startToken != "" {
-			targetToken = startToken
-			event = "update"
+		} else {
+			log.Debugf("[APNs] UpdateClimate: No active activity push token yet, waiting for client token registration")
+			a.mu.Unlock()
+			return
 		}
 	}
 	a.mu.Unlock()
@@ -633,15 +657,12 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	startToken := a.tokens.PushToStartClimate
 	a.mu.Unlock()
 
-	tokensToSend := []string{}
-	if token != "" {
-		tokensToSend = append(tokensToSend, token)
-	}
-	if startToken != "" && startToken != token {
-		tokensToSend = append(tokensToSend, startToken)
+	target := token
+	if target == "" {
+		target = startToken
 	}
 
-	if len(tokensToSend) == 0 {
+	if target == "" {
 		log.Infof("[APNs] EndClimate: No climate token registered to send end push")
 		return
 	}
@@ -667,12 +688,10 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	}
 
 	data, _ := json.Marshal(payloadMap)
-	for _, t := range tokensToSend {
-		log.Infof("[APNs] Sending climate end push (token=%.16s...)", t)
-		go func(target string) {
-			if err := a.sendPush(target, data); err != nil {
-				log.Warnf("[APNs] Failed to send climate end push: %v", err)
-			}
-		}(t)
-	}
+	log.Infof("[APNs] Sending climate end push (token=%.16s...)", target)
+	go func(t string) {
+		if err := a.sendPush(t, data); err != nil {
+			log.Warnf("[APNs] Failed to send climate end push: %v", err)
+		}
+	}(target)
 }

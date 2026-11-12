@@ -419,7 +419,8 @@ func (m *mqttClient) processBatteryLevel(reg *protocol.RegisterBatteryLevel) (sc
 	// or before the BMU link updates. A physical traction battery cannot instantaneously drop
 	// by >25% or drop from >15% to <=5% in a single step while parked.
 	lastRaw := m.lastBatteryRaw
-	glitch := false
+	isInvalid := reg.Level <= 0 || reg.Level > 100
+	glitch := isInvalid
 	if lastRaw > 15 && reg.Level <= 5 {
 		glitch = true
 	} else if lastRaw > 0 && (lastRaw-reg.Level) > 25 {
@@ -428,12 +429,20 @@ func (m *mqttClient) processBatteryLevel(reg *protocol.RegisterBatteryLevel) (sc
 		glitch = true
 	}
 
-	if glitch && m.batteryGlitchCount < 2 {
+	if glitch {
 		m.batteryGlitchCount++
 		log.Debugf("Filtering transient battery level glitch: got %d%% (last valid raw was %d%%, count %d)", reg.Level, lastRaw, m.batteryGlitchCount)
 		cache := m.mqttData["/battery/level"]
 		rawCache := m.mqttData["/battery/raw_level"]
-		return cache, rawCache, true
+		if cache == "" && lastRaw > 0 {
+			cache = strconv.Itoa(scaleBatteryLevel(lastRaw, maxSoc))
+		}
+		if rawCache == "" && lastRaw > 0 {
+			rawCache = strconv.Itoa(lastRaw)
+		}
+		if cache != "" {
+			return cache, rawCache, true
+		}
 	}
 
 	m.batteryGlitchCount = 0
@@ -971,8 +980,8 @@ func (m *mqttClient) handleIncomingMqtt(mqttClientConn mqtt.Client, msg mqtt.Mes
 			if err := cl.SetRegister(protocol.SetAckPreACTermRegister, []byte{0x01}); err != nil {
 				log.Infof("Error acknowledging Pre-AC termination: %v", err)
 			}
-		} else if lower == "off" {
-			m.sendImmediateClimate(cl, 0x00, 0, 0)
+		} else {
+			m.handleImmediateClimateTopic(cl, "mode", payloadStr)
 		}
 
 	case relTopic == "/set/climate/duration" || relTopic == "/set/climate_duration_min" || relTopic == "/set/climate_duration":
@@ -1113,16 +1122,27 @@ func (m *mqttClient) handleImmediateClimateTopic(cl *client.Client, sub, payload
 		m.climate.targetStopTime = m.climate.operatingStartTime.Add(time.Duration(durMin) * time.Minute)
 		m.climate.stopTime = m.climate.targetStopTime.Format("15:04")
 	} else {
+		offStr := "off"
+		termState := protocol.PreACOff
+		m.climate.mode = &offStr
+		m.climate.state = &termState
+		m.climate.operating = false
+		m.climate.delayPending = false
 		m.climate.manualSession = false
 		m.climate.selectedDuration = 0
 		m.climate.operatingStartTime = time.Time{}
 		m.climate.targetStopTime = time.Time{}
 		m.climate.stopTime = "--:--"
-		if m.apns != nil {
-			m.apns.EndClimate("off", "Kikapcsolva")
-		}
 	}
+	states := m.climate.mqttStates()
 	m.mu.Unlock()
+
+	for t, p := range states {
+		m.publish(t, p)
+	}
+	if mode == 0x00 && m.apns != nil {
+		m.apns.EndClimate("off", "Kikapcsolva")
+	}
 }
 
 func (m *mqttClient) sendImmediateClimate(cl *client.Client, mode, durIdx, delayIdx byte) {
@@ -1479,7 +1499,7 @@ func (m *mqttClient) handlePhev() error {
 		defer updaterTicker.Stop()
 	}
 
-	climateTicker := time.NewTicker(30 * time.Second)
+	climateTicker := time.NewTicker(15 * time.Second)
 	defer climateTicker.Stop()
 
 	for {
@@ -1497,6 +1517,7 @@ func (m *mqttClient) handlePhev() error {
 				for t, p := range states {
 					m.publish(t, p)
 				}
+				m.syncClimateAPNs(states)
 			}
 		case <-updaterC:
 			if atomic.CompareAndSwapInt32(&m.pollInFlight, 0, 1) {
