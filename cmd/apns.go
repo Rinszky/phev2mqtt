@@ -77,11 +77,24 @@ func newAPNsClient() *APNsClient {
 
 	keyFile := viper.GetString("apns_key_file")
 	if keyFile == "" {
-		// Look for apns_key.p8 or AuthKey_*.p8 in working dir or /etc/phev2mqtt/
 		candidates := []string{
 			"apns_key.p8",
 			"AuthKey_34BYS72AWT.p8",
 			"/etc/phev2mqtt/apns_key.p8",
+			"/etc/phev2mqtt/AuthKey_34BYS72AWT.p8",
+			"/home/rinszky/phev2mqtt/apns_key.p8",
+			"/home/rinszky/phev2mqtt/AuthKey_34BYS72AWT.p8",
+		}
+		searchDirs := []string{
+			".",
+			"/etc/phev2mqtt",
+			"/home/rinszky/phev2mqtt",
+			"/home/rinszky",
+		}
+		for _, dir := range searchDirs {
+			if matches, _ := filepath.Glob(filepath.Join(dir, "*.p8")); len(matches) > 0 {
+				candidates = append(candidates, matches...)
+			}
 		}
 		for _, c := range candidates {
 			if _, err := os.Stat(c); err == nil {
@@ -95,18 +108,18 @@ func newAPNsClient() *APNsClient {
 	if keyFile != "" {
 		data, err := os.ReadFile(keyFile)
 		if err != nil {
-			log.Warnf("[APNs] Failed to read key file %s: %v", keyFile, err)
+			log.Errorf("[APNs] Failed to read key file %s: %v", keyFile, err)
 		} else {
 			key, err := parseAPNsPrivateKey(data)
 			if err != nil {
-				log.Warnf("[APNs] Failed to parse private key %s: %v", keyFile, err)
+				log.Errorf("[APNs] Failed to parse private key %s: %v", keyFile, err)
 			} else {
 				privateKey = key
 				log.Infof("[APNs] Initialized APNs client with key %s (KeyID=%s, TeamID=%s)", keyFile, keyID, teamID)
 			}
 		}
 	} else {
-		log.Debug("[APNs] No APNs key file configured, APNs push will be disabled until configured")
+		log.Errorf("[APNs] CRITICAL: No APNs .p8 key file found! Checked in current dir, /etc/phev2mqtt, /home/rinszky/phev2mqtt. APNs Live Activities cannot be sent!")
 	}
 
 	tokenFile := filepath.Join(os.TempDir(), "phev_apns_tokens.json")
@@ -346,6 +359,7 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 // UpdateCharging sends a Live Activity update for battery charging
 func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime string, isCharging bool) {
 	if a.privateKey == nil {
+		log.Errorf("[APNs] Cannot send charging push: APNs private key is nil! Check .p8 key file on Pi.")
 		return
 	}
 
@@ -463,6 +477,7 @@ func (a *APNsClient) EndCharging(soc int) {
 // UpdateClimate sends a Live Activity update for HVAC / preconditioning
 func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins int, duration int, stopTime string, isActive bool) {
 	if a.privateKey == nil {
+		log.Errorf("[APNs] Cannot send climate push: APNs private key is nil! Check .p8 key file on Pi.")
 		return
 	}
 
