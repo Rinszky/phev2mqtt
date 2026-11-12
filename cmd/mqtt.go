@@ -112,7 +112,11 @@ func (c *climate) setMode(m string, dur uint8) {
 	}
 }
 
-func (c *climate) setState(reg *protocol.RegisterPreACState) {
+func (c *climate) setState(reg *protocol.RegisterPreACState, refTime ...time.Time) {
+	now := time.Now()
+	if len(refTime) > 0 {
+		now = refTime[0]
+	}
 	st := reg.State
 	c.state = &st
 	if st == protocol.PreACStarting {
@@ -132,11 +136,11 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 	isOp := c.operating || st == protocol.PreACOn
 	if isOp {
 		if c.operatingStartTime.IsZero() {
-			c.operatingStartTime = time.Now()
+			c.operatingStartTime = now
 		}
 	} else if !c.delayPending {
 		if st == protocol.PreACOff || st == protocol.PreACTerminated {
-			if time.Since(c.operatingStartTime) > 15*time.Second {
+			if now.Sub(c.operatingStartTime) > 15*time.Second {
 				c.operatingStartTime = time.Time{}
 				c.targetStopTime = time.Time{}
 				c.delayStartTime = time.Time{}
@@ -144,14 +148,18 @@ func (c *climate) setState(reg *protocol.RegisterPreACState) {
 			}
 		}
 	}
-	c.updateTiming(time.Now())
+	c.updateTiming(now)
 }
 
-func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
+func (c *climate) setOper(reg *protocol.RegisterACOperStatus, refTime ...time.Time) {
+	now := time.Now()
+	if len(refTime) > 0 {
+		now = refTime[0]
+	}
 	c.hasOper = true
 	c.operating = reg.Operating
 	if reg.DelayPending && !c.delayPending {
-		c.delayStartTime = time.Now()
+		c.delayStartTime = now
 	} else if !reg.DelayPending {
 		c.delayStartTime = time.Time{}
 	}
@@ -160,11 +168,11 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 	isOp := reg.Operating || (c.state != nil && *c.state == protocol.PreACOn)
 	if isOp {
 		if c.operatingStartTime.IsZero() {
-			c.operatingStartTime = time.Now()
+			c.operatingStartTime = now
 		}
 	} else if !reg.DelayPending {
 		if !reg.Operating && (c.state == nil || *c.state == protocol.PreACOff || *c.state == protocol.PreACTerminated) {
-			if time.Since(c.operatingStartTime) > 15*time.Second {
+			if now.Sub(c.operatingStartTime) > 15*time.Second {
 				c.operatingStartTime = time.Time{}
 				c.targetStopTime = time.Time{}
 				c.manualSession = false
@@ -178,11 +186,11 @@ func (c *climate) setOper(reg *protocol.RegisterACOperStatus) {
 	if reg.Delay == 0 || reg.Delay == 5 || reg.Delay == 10 {
 		c.selectedDelay = reg.Delay
 	}
-	c.updateTiming(time.Now())
+	c.updateTiming(now)
 }
 
 // activeDuration returns the duration in minutes for the active climate session.
-func (c *climate) activeDuration() int {
+func (c *climate) activeDuration(refTime ...time.Time) int {
 	if c.manualSession {
 		if c.selectedDuration == 10 || c.selectedDuration == 20 || c.selectedDuration == 30 {
 			return c.selectedDuration
@@ -191,6 +199,9 @@ func (c *climate) activeDuration() int {
 	}
 
 	now := time.Now()
+	if len(refTime) > 0 {
+		now = refTime[0]
+	}
 	if c.isScheduledSession(now) && c.schedule != nil {
 		for _, timer := range c.schedule.Timers {
 			if timer.Enabled && timer.Hour == c.startHour && (timer.Minute == c.startMinute || timer.Minute/10 == c.startMinute/10) {
@@ -226,7 +237,7 @@ func (c *climate) updateTiming(now time.Time) {
 		return
 	}
 
-	dur := c.activeDuration()
+	dur := c.activeDuration(now)
 
 	if c.delayPending {
 		totalMin := c.selectedDelay + dur
@@ -438,17 +449,21 @@ func (m *mqttClient) processBatteryLevel(reg *protocol.RegisterBatteryLevel) (sc
 
 	if glitch {
 		m.batteryGlitchCount++
-		log.Debugf("Filtering transient battery level glitch: got %d%% (last valid raw was %d%%, count %d)", reg.Level, lastRaw, m.batteryGlitchCount)
-		cache := m.mqttData["/battery/level"]
-		rawCache := m.mqttData["/battery/raw_level"]
-		if cache == "" && lastRaw > 0 {
-			cache = strconv.Itoa(scaleBatteryLevel(lastRaw, maxSoc))
-		}
-		if rawCache == "" && lastRaw > 0 {
-			rawCache = strconv.Itoa(lastRaw)
-		}
-		if cache != "" {
-			return cache, rawCache, true
+		if m.batteryGlitchCount < 3 {
+			log.Debugf("Filtering transient battery level glitch: got %d%% (last valid raw was %d%%, count %d)", reg.Level, lastRaw, m.batteryGlitchCount)
+			cache := m.mqttData["/battery/level"]
+			rawCache := m.mqttData["/battery/raw_level"]
+			if cache == "" && lastRaw > 0 {
+				cache = strconv.Itoa(scaleBatteryLevel(lastRaw, maxSoc))
+			}
+			if rawCache == "" && lastRaw > 0 {
+				rawCache = strconv.Itoa(lastRaw)
+			}
+			if cache != "" {
+				return cache, rawCache, true
+			}
+		} else {
+			log.Warnf("Sustained battery level reading %d%% accepted after %d readings", reg.Level, m.batteryGlitchCount)
 		}
 	}
 

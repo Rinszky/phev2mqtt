@@ -34,12 +34,13 @@ func TestClimateTimerArmedIsNotImmediateAC(t *testing.T) {
 
 	// Case 2: Scheduled climate timer triggers preheating at programmed time (7:20).
 	// RegisterPreACState reports PreACOn with start time 07:20. Duration is 20 min -> stop time MUST be 07:40!
+	testTime := time.Date(2026, 11, 9, 7, 20, 0, 0, time.Local)
 	c.setState(&protocol.RegisterPreACState{
 		State:         protocol.PreACOn,
 		HasTargetTime: true,
 		TargetHour:    7,
 		TargetMinute:  20,
-	})
+	}, testTime)
 	sRunning := c.mqttStates()
 	if sRunning["/climate/heat"] != "on" || sRunning["/climate/mode"] != "heat" || sRunning["/climate/state"] != "heat" || sRunning["/climate/operating"] != "on" {
 		t.Errorf("scheduled preheating active must report heat on and operating on: %v", sRunning)
@@ -52,7 +53,7 @@ func TestClimateTimerArmedIsNotImmediateAC(t *testing.T) {
 	}
 
 	// Case 3: Manual immediate AC operating.
-	c.setOper(&protocol.RegisterACOperStatus{Operating: true})
+	c.setOper(&protocol.RegisterACOperStatus{Operating: true}, testTime)
 	sManual := c.mqttStates()
 	if sManual["/climate/heat"] != "on" || sManual["/climate/operating"] != "on" {
 		t.Errorf("manual operating AC should be heat on and operating on: %v", sManual)
@@ -81,7 +82,7 @@ func TestClimateRemainingAndCompletion(t *testing.T) {
 		HasTargetTime: true,
 		TargetHour:    7,
 		TargetMinute:  20,
-	})
+	}, now)
 	rem, comp = c.remainingAndCompletion(now)
 	if rem != 15 || comp != "2026-11-09T07:40:00Z" {
 		t.Errorf("running expected rem=15 comp=2026-11-09T07:40:00Z, got rem=%d comp=%s", rem, comp)
