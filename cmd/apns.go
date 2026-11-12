@@ -421,6 +421,16 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander PHEV",
 		}
+		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
+			"title": "Töltés elindult",
+			"body":  fmt.Sprintf("Akkumulátor: %d%% (%d perc van hátra)", soc, remainingMins),
+			"sound": "default",
+		}
+	} else {
+		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
+			"title": "Töltés folyamatban",
+			"body":  fmt.Sprintf("Akkumulátor: %d%% (%d perc van hátra)", soc, remainingMins),
+		}
 	}
 
 	data, _ := json.Marshal(payloadMap)
@@ -536,6 +546,16 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		payloadMap["aps"].(map[string]interface{})["attributes-type"] = "ClimateActivityAttributes"
 		payloadMap["aps"].(map[string]interface{})["attributes"] = map[string]interface{}{
 			"title": "Outlander Klíma",
+		}
+		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
+			"title": modeName,
+			"body":  fmt.Sprintf("Időtartam: %d perc (Leállás: ~%s)", duration, stopTime),
+			"sound": "default",
+		}
+	} else {
+		payloadMap["aps"].(map[string]interface{})["alert"] = map[string]interface{}{
+			"title": modeName,
+			"body":  fmt.Sprintf("%d perc van hátra (Leállás: ~%s)", remainingMins, stopTime),
 		}
 	}
 
