@@ -277,19 +277,13 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	}
 
 	changed := false
-	var shouldDismissClimate bool
-	var isFCMToken bool
 
 	switch normalizedType {
 	case "fcm", "android", "fcm_climate":
-		isFCMToken = true
 		a.knownFCMTokens[token] = time.Now()
 		if a.tokens.FCM != token {
 			a.tokens.FCM = token
 			changed = true
-		}
-		if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
-			shouldDismissClimate = true
 		}
 	case "charging":
 		if a.tokens.Charging != token {
@@ -301,10 +295,6 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 		if a.tokens.Climate != token {
 			a.tokens.Climate = token
 			changed = true
-		}
-		// If climate is currently OFF or ending, dismiss this token immediately
-		if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
-			shouldDismissClimate = true
 		}
 	case "push_to_start_charging", "push_to_start":
 		if a.tokens.PushToStartCharging != token {
@@ -321,25 +311,17 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 		var parsed map[string]string
 		if err := json.Unmarshal([]byte(token), &parsed); err == nil {
 			if v, ok := parsed["fcm"]; ok && v != "" {
-				isFCMToken = true
 				a.knownFCMTokens[v] = time.Now()
 				if a.tokens.FCM != v {
 					a.tokens.FCM = v
 					changed = true
-				}
-				if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
-					shouldDismissClimate = true
 				}
 			}
 			if v, ok := parsed["fcm_token"]; ok && v != "" {
-				isFCMToken = true
 				a.knownFCMTokens[v] = time.Now()
 				if a.tokens.FCM != v {
 					a.tokens.FCM = v
 					changed = true
-				}
-				if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
-					shouldDismissClimate = true
 				}
 			}
 			if v, ok := parsed["charging"]; ok && v != "" {
@@ -350,9 +332,6 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 				a.knownClimateTokens[v] = time.Now()
 				a.tokens.Climate = v
 				changed = true
-				if !a.lastClimateState || a.climatePendingEnd || (!a.climatePendingEndAt.IsZero() && time.Now().Before(a.climatePendingEndAt)) {
-					shouldDismissClimate = true
-				}
 			}
 		}
 	}
@@ -362,18 +341,6 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 		log.Infof("[APNs] Updated and persisted %s push token: %s", tokenType, token)
 	}
 	a.mu.Unlock()
-
-	if shouldDismissClimate {
-		if isFCMToken {
-			if a.fcm != nil {
-				log.Infof("[FCM] Climate token received while climate is off/ending (%.16s...), sending immediate dismissal", token)
-				go a.fcm.EndClimate(token)
-			}
-		} else {
-			log.Infof("[APNs] Climate token received while climate is off/ending (%.16s...), sending immediate dismissal", token)
-			go a.sendEndClimateToToken(token)
-		}
-	}
 }
 
 func (a *APNsClient) generateJWT() (string, error) {
@@ -488,6 +455,21 @@ func (a *APNsClient) sendPush(deviceToken string, payload []byte) error {
 			}
 			a.mu.Unlock()
 			log.Infof("[APNs] Push notification delivered (HTTP 200, env=%s, apns-id=%s)", baseURL, resp.Header.Get("apns-id"))
+			return nil
+		}
+
+		if resp.StatusCode == http.StatusGone {
+			a.mu.Lock()
+			delete(a.knownClimateTokens, deviceToken)
+			if a.tokens.Climate == deviceToken {
+				a.tokens.Climate = ""
+			}
+			if a.tokens.Charging == deviceToken {
+				a.tokens.Charging = ""
+			}
+			a.saveTokens()
+			a.mu.Unlock()
+			log.Infof("[APNs] Removed expired token (HTTP 410): %.16s...", deviceToken)
 			return nil
 		}
 
@@ -659,6 +641,8 @@ func (a *APNsClient) EndCharging(soc int) {
 			}(tok)
 		}
 	}
+	a.tokens.Charging = ""
+	a.saveTokens()
 	a.mu.Unlock()
 
 	if a.privateKey == nil {
@@ -850,12 +834,16 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 	}
 
 	a.mu.Lock()
+	if !a.lastClimateState {
+		a.mu.Unlock()
+		return
+	}
 	a.lastClimateState = false
 	a.lastClimateMode = "off"
 	a.lastClimateRem = 0
 	a.climateSessionStart = time.Time{}
-	a.climatePendingEnd = true
-	a.climatePendingEndAt = time.Now().Add(5 * time.Minute)
+	a.climatePendingEnd = false
+	a.climatePendingEndAt = time.Time{}
 
 	if a.fcm != nil {
 		fcmTokens := make(map[string]bool)
@@ -885,6 +873,9 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 			tokensToDismiss[t] = true
 		}
 	}
+	a.tokens.Climate = ""
+	a.knownClimateTokens = make(map[string]time.Time)
+	a.saveTokens()
 	a.mu.Unlock()
 
 	if a.privateKey == nil {
