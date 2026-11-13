@@ -343,6 +343,34 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	a.mu.Unlock()
 }
 
+// removeInvalidFCMToken forgets tokens that FCM has definitively revoked.
+// The app will register its current token through the backend and MQTT bridge.
+func (a *APNsClient) removeInvalidFCMToken(token string, sendErr error) {
+	if sendErr == nil || token == "" {
+		return
+	}
+	errorText := strings.ToLower(sendErr.Error())
+	if !strings.Contains(errorText, "unregistered") && !strings.Contains(errorText, "notregistered") {
+		return
+	}
+
+	a.mu.Lock()
+	_, wasKnown := a.knownFCMTokens[token]
+	delete(a.knownFCMTokens, token)
+	wasCurrent := a.tokens.FCM == token
+	if wasCurrent {
+		a.tokens.FCM = ""
+	}
+	if wasKnown || wasCurrent {
+		a.saveTokens()
+	}
+	a.mu.Unlock()
+
+	if wasKnown || wasCurrent {
+		log.Warnf("[FCM] Removed unregistered Android token %.16s...", token)
+	}
+}
+
 func (a *APNsClient) generateJWT() (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -545,6 +573,7 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		for tok := range fcmTokens {
 			go func(target string) {
 				if err := a.fcm.UpdateCharging(target, soc, remainingMins, cleanCompTime); err != nil {
+					a.removeInvalidFCMToken(target, err)
 					log.Warnf("[FCM] Failed to send charging update push: %v", err)
 				}
 			}(tok)
@@ -662,6 +691,7 @@ func (a *APNsClient) EndCharging(soc int) {
 		for tok := range fcmTokens {
 			go func(target string) {
 				if err := a.fcm.EndCharging(target); err != nil {
+					a.removeInvalidFCMToken(target, err)
 					log.Warnf("[FCM] Failed to send charging end push: %v", err)
 				}
 			}(tok)
@@ -763,6 +793,7 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		for tok := range fcmTokens {
 			go func(target string) {
 				if err := a.fcm.UpdateClimate(target, mode, modeName, remainingMins, duration, stopTime, isActive); err != nil {
+					a.removeInvalidFCMToken(target, err)
 					log.Warnf("[FCM] Failed to send climate update: %v", err)
 				}
 			}(tok)
@@ -889,6 +920,7 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 		for tok := range fcmTokens {
 			go func(target string) {
 				if err := a.fcm.EndClimate(target); err != nil {
+					a.removeInvalidFCMToken(target, err)
 					log.Warnf("[FCM] Failed to send climate end push: %v", err)
 				}
 			}(tok)

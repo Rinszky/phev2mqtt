@@ -35,6 +35,7 @@ bool MqttManager::begin(Client& netClient,
                         const char* user,
                         const char* pass,
                         const char* prefix,
+                        const char* websocketPath,
                         PhevClient* phevClient,
                         CellularModem* modem,
                         ObdReader* obdReader) {
@@ -48,12 +49,13 @@ bool MqttManager::begin(Client& netClient,
     m_modem = modem;
     m_obd = obdReader;
 
-    m_mqtt.setClient(netClient);
+    m_wssClient.begin(netClient, websocketPath);
+    m_mqtt.setClient(m_wssClient);
     m_mqtt.setServer(server, port);
     m_mqtt.setCallback(callbackStatic);
     m_mqtt.setBufferSize(2048); // Large buffer for HA discovery payloads
 
-    LOG_I(TAG, "Configured MQTT to %s:%d, prefix=%s", server, port, prefix);
+    LOG_I(TAG, "Configured MQTT WSS to %s:%d%s, prefix=%s", server, port, websocketPath, prefix);
     return true;
 }
 
@@ -372,9 +374,12 @@ void MqttManager::publishDiscovery() {
         m_mqtt.publish(configTopic.c_str(), payload.c_str(), true);
     };
 
+    // Remove the old raw SOC entity from Home Assistant discovery.
+    String rawSocConfigTopic = m_haPrefix + "/sensor/" + vin + "/battery/raw_level/config";
+    m_mqtt.publish(rawSocConfigTopic.c_str(), "", true);
+
     // Sensors
     publishSensor("sensor", "battery/level", "Battery Level", "battery", "%", "mdi:battery");
-    publishSensor("sensor", "battery/raw_level", "Battery Raw Level", "battery", "%", "mdi:battery-alert");
     publishSensor("sensor", "battery/charge_time_remaining", "Charge Time Remaining", "duration", "min", "mdi:timer-outline");
     publishSensor("sensor", "battery/charge_completion_time", "Charge Completion Time", "timestamp", nullptr, "mdi:clock-check-outline");
     publishSensor("sensor", "climate/remaining", "Climate Remaining Time", "duration", "min", "mdi:timer-sand");

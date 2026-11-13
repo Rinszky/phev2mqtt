@@ -4,20 +4,16 @@
 #include "logger.h"
 #include "phev_client.h"
 #include "cellular_modem.h"
-#include "wireguard_vpn.h"
 #include "mqtt_manager.h"
 #include "power_manager.h"
-#include "remote_cli.h"
 #include "obd_reader.h"
 
 #define TAG "MAIN"
 
 static PhevClient    s_phev;
 static CellularModem s_modem;
-static WireGuardVPN  s_vpn;
 static MqttManager   s_mqtt;
 static PowerManager  s_power;
-static RemoteCLI     s_cli;
 static ObdReader     s_obd;
 
 static uint32_t s_bootTime = 0;
@@ -63,34 +59,19 @@ void setup() {
         LOG_W(TAG, "LTE Modem initialization failed or no SIM. Will retry in loop.");
     }
 
-    // 6. WireGuard VPN Tunnel
-    if (cfg.wg_enabled && cfg.wg_endpoint_host.length() > 0) {
-        LOG_I(TAG, "Starting WireGuard VPN Tunnel to %s:%d...", cfg.wg_endpoint_host.c_str(), cfg.wg_endpoint_port);
-        s_vpn.begin(
-            cfg.wg_local_ip.c_str(),
-            cfg.wg_private_key.c_str(),
-            cfg.wg_endpoint_host.c_str(),
-            cfg.wg_endpoint_port,
-            cfg.wg_peer_pubkey.c_str(),
-            cfg.wg_allowed_ips.c_str()
-        );
-    } else {
-        LOG_I(TAG, "WireGuard VPN is disabled or unconfigured.");
-    }
-
-    // 7. Connect to Car Wi-Fi Access Point (Station Mode)
+    // 6. Connect to Car Wi-Fi Access Point (Station Mode)
     LOG_I(TAG, "Connecting to Vehicle Wi-Fi AP (%s)...", cfg.wifi_ssid.c_str());
     s_phev.setBatteryMaxSoc(cfg.battery_max_soc);
     s_phev.begin(cfg.wifi_ssid.c_str(), cfg.wifi_pass.c_str());
 
-    // 8. Bluetooth OBD2 Telemetry Reader (BMU Diagnostics & Watchdog)
+    // 7. Bluetooth OBD2 Telemetry Reader (BMU Diagnostics & Watchdog)
     if (cfg.obd_enabled) {
         LOG_I(TAG, "Starting Bluetooth OBD2 Telemetry Service (%s)...", cfg.obd_device_name.c_str());
         s_obd.begin(cfg.obd_device_name.c_str(), cfg.obd_pin.c_str(), cfg.obd_mac.c_str(), cfg.obd_nominal_ah);
     }
 
-    // 9. Connect to Home MQTT Broker (routed through WireGuard VPN)
-    Client* netClient = s_modem.getNetworkClient();
+    // 8. Connect to MQTT over verified WSS through cellular data
+    Client* netClient = s_modem.getSecureNetworkClient();
     if (netClient) {
         s_mqtt.begin(
             *netClient,
@@ -99,6 +80,7 @@ void setup() {
             cfg.mqtt_user.c_str(),
             cfg.mqtt_pass.c_str(),
             cfg.mqtt_prefix.c_str(),
+            cfg.mqtt_path.c_str(),
             &s_phev,
             &s_modem,
             &s_obd
@@ -106,9 +88,6 @@ void setup() {
         s_mqtt.setHAEnabled(cfg.ha_discovery);
         s_mqtt.setHAPrefix(DEFAULT_HA_PREFIX);
     }
-
-    // 10. Remote CLI Maintenance Shell (over VPN)
-    s_cli.begin(REMOTE_CLI_PORT, REMOTE_CLI_PASSWORD, &s_phev, &s_modem, &s_power, &s_obd);
 
     LOG_I(TAG, "System initialization complete. Entering main loop.");
 }
@@ -127,22 +106,16 @@ void loop() {
     // 1. Maintain Cellular Modem
     s_modem.loop();
 
-    // 2. Maintain WireGuard VPN Tunnel
-    s_vpn.loop();
-
-    // 3. Maintain Car Wi-Fi TCP Session & Protocol Polling
+    // 2. Maintain Car Wi-Fi TCP Session & Protocol Polling
     s_phev.loop();
 
-    // 4. Maintain OBD2 Bluetooth Diagnostic Session
+    // 3. Maintain OBD2 Bluetooth Diagnostic Session
     s_obd.loop();
 
-    // 5. Maintain MQTT Connection & Command Handling
+    // 4. Maintain MQTT Connection & Command Handling
     s_mqtt.loop();
 
-    // 6. Remote CLI Shell Service
-    s_cli.loop();
-
-    // 7. Battery Protection & Duty Cycle Sleep Monitoring
+    // 5. Battery Protection & Duty Cycle Sleep Monitoring
     s_power.loop();
 
     // Yield to FreeRTOS watchdog

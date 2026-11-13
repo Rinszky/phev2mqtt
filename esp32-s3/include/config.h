@@ -7,8 +7,8 @@
 // 1. VEHICLE WI-FI SETTINGS (Direct connection to Outlander PHEV AP)
 // ==============================================================================
 // The car broadcasts an SSID typically named "REMOTE..." (case-sensitive)
-#define DEFAULT_PHEV_WIFI_SSID       "REMOTExxxxxx"
-#define DEFAULT_PHEV_WIFI_PASSWORD   "xxxxxxxxxxxxxx"
+#define DEFAULT_PHEV_WIFI_SSID       ""
+#define DEFAULT_PHEV_WIFI_PASSWORD   ""
 #define PHEV_CAR_IP                  "192.168.8.46"
 #define PHEV_CAR_PORT                8080
 #define PHEV_PING_INTERVAL_MS        1500
@@ -31,9 +31,11 @@
 #define MODEM_BAUDRATE               115200
 
 // Cellular APN (Telekom: "net", Yettel: "net", Vodafone: "internet", Digi: "internet")
-#define DEFAULT_LTE_APN              "net"
+#define DEFAULT_LTE_APN              ""
 #define DEFAULT_LTE_USER             ""
 #define DEFAULT_LTE_PASS             ""
+#define DEFAULT_BACKEND_API_URL      "https://api.lorinszkym.synology.me"
+#define CONFIGURATION_VERSION        2
 
 // ==============================================================================
 // 3. GPS / GNSS VEHICLE TRACKING (Home Assistant Device Tracker)
@@ -41,25 +43,14 @@
 #define GPS_ENABLED                  true
 #define GPS_POLL_INTERVAL_SEC        15 // Send GPS update to Home Assistant every 15s
 
+// ============================================================================
+// 4. MQTT & HOME ASSISTANT CONFIGURATION
 // ==============================================================================
-// 4. WIREGUARD VPN CONFIGURATION (Tunnel to Home Network)
-// ==============================================================================
-#define DEFAULT_WG_LOCAL_IP          "10.0.0.50"
-#define DEFAULT_WG_NETMASK           "255.255.255.0"
-#define DEFAULT_WG_PRIVATE_KEY       "aA11...=" // ESP32 base64 private key
-#define DEFAULT_WG_ENDPOINT_HOST     "home.example.com" // Home WAN IP or DDNS
-#define DEFAULT_WG_ENDPOINT_PORT     51820
-#define DEFAULT_WG_PEER_PUBKEY       "bB22...=" // Home server base64 public key
-#define DEFAULT_WG_ALLOWED_IPS       "10.0.0.0/24,192.168.1.0/24"
-
-// ==============================================================================
-// 5. MQTT & HOME ASSISTANT CONFIGURATION
-// ==============================================================================
-#define DEFAULT_MQTT_SERVER          "10.0.0.1" // or "192.168.1.100" (home broker via VPN)
-#define DEFAULT_MQTT_PORT            1883
-#define DEFAULT_MQTT_USER            "phev_user"
-#define DEFAULT_MQTT_PASS            "phev_pass"
-#define DEFAULT_MQTT_PREFIX          "phev"
+#define DEFAULT_MQTT_SERVER          ""
+#define DEFAULT_MQTT_PORT            0
+#define DEFAULT_MQTT_USER            ""
+#define DEFAULT_MQTT_PASS            ""
+#define DEFAULT_MQTT_PREFIX          ""
 #define DEFAULT_HA_DISCOVERY         true
 #define DEFAULT_HA_PREFIX            "homeassistant"
 #define DEFAULT_BATTERY_MAX_SOC      94 // Scale 94% raw BMU reading smoothly to 100%
@@ -83,10 +74,8 @@
 #define DUTY_CYCLE_WAKE_SECONDS      45 // Wake for 45s to poll car and check MQTT commands
 
 // ==============================================================================
-// 7. REMOTE MAINTENANCE, CLI SHELL & OTA
+// 6. LOCAL MAINTENANCE & OTA
 // ==============================================================================
-#define REMOTE_CLI_PORT              2222 // Telnet/TCP CLI shell over VPN tunnel
-#define REMOTE_CLI_PASSWORD          "phevadmin"
 #define LOG_BUFFER_SIZE              8192 // In-memory ring buffer for live log dump
 
 // ==============================================================================

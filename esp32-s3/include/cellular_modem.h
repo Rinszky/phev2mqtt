@@ -24,6 +24,7 @@ public:
     void wakeFromSleep();
 
     Client* getNetworkClient();
+    Client* getSecureNetworkClient();
 
     // GPS / GNSS Tracking
     bool enableGPS();
@@ -62,6 +63,7 @@ private:
     uint32_t m_lastGpsPoll;
 
     bool initModem();
+    void synchronizeClock();
     bool connectGPRS();
 };
 

@@ -155,19 +155,14 @@ A modul rendelkezik egy beépített **Webes Setup Varázslóval (Captive Portal)
 2. **Csatlakozás telefonnal vagy laptoppal:**
    - Csatlakozz a telefonoddal a `PHEV-Bridge-Setup` Wi-Fi-re.
    - A telefonon automatikusan felugrik a beállítófelület (Captive Portal), vagy nyisd meg a böngészőben a **`http://192.168.4.1`** címet.
-3. **Beállítások megadása:**
-   - 🚗 **Autó Wi-Fi:** `REMOTExxxxxx` SSID és a jármű jelszava.
-   - 📶 **SIM kártya:** APN (pl. `net`) és ha van, a SIM PIN kódja (a modul feloldja a PIN-záras kártyát is!).
-   - 🛡️ **WireGuard VPN:** Otthoni szervercím, belső VPN IP és kulcsok.
-   - 🏠 **Home Assistant:** MQTT szerver, felhasználó, jelszó.
-   - 🔍 **Bluetooth OBD2:** Bekapcsolva / Ki, adapter neve (`OBDII` vagy `vgate`), PIN.
+3. **Beállítások megadása:** add meg a 17 karakteres VIN-t és az admin felületen létrehozott pairing code-ot. Az autó Wi-Fi adatait és a device-specifikus MQTT beállításokat a backend automatikusan visszaadja. A backend járműrekordban előre szerepelnie kell az autó Wi-Fi SSID-jének és jelszavának.
 4. **Mentés és Újraindítás:**
    - Kattints a **"Beállítások Mentése és Újraindítás"** gombra.
    - A konfiguráció elmentődik az ESP32 belső NVS Flash memóriájába, és a modul automatikusan elindul normál üzemben!
 
 > [!TIP]
 > **Nem tudod kizárni magad:** Ha elgépelted a Wi-Fi jelszót, vagy másik autóba szerelnéd át, és a modul 3 percig nem találja a járművet, **automatikusan újraindítja a `PHEV-Bridge-Setup` hotspotot**!
-> A távoli VPN Telnet shellből a **`setup`** paranccsal bármikor újraindítható a webes felület, a **`config`** paranccsal megnézhetők a mentett értékek, a **`factoryreset`** paranccsal pedig törölhetők.
+> A SIM PIN-kérés legyen kikapcsolva. Ha a párosítás nem indul el, nyisd meg a portált a telefon normál böngészőjében, és ellenőrizd, hogy a mobiladat-kapcsolat elérhető-e a beállító Wi-Fi mellett.
 
 ### Összegzés:
 A 10.000 mAh-s power bankkal:

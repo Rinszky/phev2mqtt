@@ -6,11 +6,27 @@
 #define TINY_GSM_MODEM_SIM7600
 #endif
 #include <TinyGsmClient.h>
+#include <SSLClientESP32.h>
+#include <sys/time.h>
+#include <time.h>
+#include "isrg_root_x1.h"
 
 #define TAG "LTE"
 
 static TinyGsm* s_pModem = nullptr;
 static TinyGsmClient* s_pGsmClient = nullptr;
+static SSLClientESP32* s_pSecureClient = nullptr;
+
+static time_t toUtcEpoch(int year, int month, int day, int hour, int minute, int second) {
+    year -= month <= 2;
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+    const unsigned adjustedMonth = static_cast<unsigned>(month + (month > 2 ? -3 : 9));
+    const unsigned dayOfYear = (153 * adjustedMonth + 2) / 5 + day - 1;
+    const unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+    const int64_t daysSinceEpoch = static_cast<int64_t>(era) * 146097 + dayOfEra - 719468;
+    return static_cast<time_t>(daysSinceEpoch * 86400 + hour * 3600 + minute * 60 + second);
+}
 
 CellularModem::CellularModem()
     : m_serial(MODEM_UART_NUM),
@@ -156,6 +172,10 @@ bool CellularModem::initModem() {
     if (!s_pGsmClient) {
         s_pGsmClient = new TinyGsmClient(*s_pModem);
     }
+    if (!s_pSecureClient) {
+        s_pSecureClient = new SSLClientESP32(s_pGsmClient);
+        s_pSecureClient->setCACert(ISRG_ROOT_X1);
+    }
 
     LOG_I(TAG, "Testing AT communication with A7670E modem...");
     int retries = 5;
@@ -196,8 +216,17 @@ bool CellularModem::initModem() {
 }
 
 bool CellularModem::connectGPRS() {
-    LOG_I(TAG, "Connecting to LTE APN: %s", m_apn.c_str());
-    if (!s_pModem->gprsConnect(m_apn.c_str(), m_user.c_str(), m_pass.c_str())) {
+    String apn = m_apn;
+    if (apn.isEmpty()) {
+        String carrier = m_operator;
+        carrier.toLowerCase();
+        apn = (carrier.indexOf("telekom") >= 0 || carrier.indexOf("yettel") >= 0 || carrier.indexOf("telenor") >= 0)
+            ? "net"
+            : "internet";
+        LOG_I(TAG, "Selected LTE APN '%s' for operator '%s'", apn.c_str(), m_operator.c_str());
+    }
+    LOG_I(TAG, "Connecting to LTE APN: %s", apn.c_str());
+    if (!s_pModem->gprsConnect(apn.c_str(), m_user.c_str(), m_pass.c_str())) {
         LOG_E(TAG, "Failed to connect to APN!");
         m_connected = false;
         return false;
@@ -205,7 +234,41 @@ bool CellularModem::connectGPRS() {
     m_connected = true;
     String localIP = s_pModem->getLocalIP();
     LOG_I(TAG, "LTE Connected! Cellular IP: %s", localIP.c_str());
+    synchronizeClock();
     return true;
+}
+
+void CellularModem::synchronizeClock() {
+    // TLS certificate validity checks fail when the ESP32 clock is still at
+    // its default epoch. Ask the modem to sync over its cellular data bearer.
+    const time_t currentTime = time(nullptr);
+    if (currentTime >= 1767225600 && currentTime < 2051222400) return; // 2026 through 2034
+
+    LOG_I(TAG, "Synchronizing system clock from cellular network for TLS...");
+    const int result = s_pModem->NTPServerSync("pool.ntp.org", 0);
+    if (result != 1) {
+        LOG_W(TAG, "Cellular NTP sync failed (result=%d); TLS certificate checks may fail", result);
+        return;
+    }
+
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    float timezone = 0;
+    if (!s_pModem->getNetworkTime(&year, &month, &day, &hour, &minute, &second, &timezone)) {
+        LOG_W(TAG, "Could not read synchronized modem time");
+        return;
+    }
+
+    const time_t epoch = toUtcEpoch(year, month, day, hour, minute, second) -
+                         static_cast<time_t>(timezone * 3600.0f);
+    if (epoch <= 0) {
+        LOG_W(TAG, "Modem returned an invalid date/time");
+        return;
+    }
+
+    timeval now = { .tv_sec = epoch, .tv_usec = 0 };
+    settimeofday(&now, nullptr);
+    LOG_I(TAG, "System clock synchronized: %04d-%02d-%02d %02d:%02d:%02d UTC",
+          year, month, day, hour, minute, second);
 }
 
 void CellularModem::loop() {
@@ -236,4 +299,8 @@ void CellularModem::loop() {
 
 Client* CellularModem::getNetworkClient() {
     return s_pGsmClient;
+}
+
+Client* CellularModem::getSecureNetworkClient() {
+    return s_pSecureClient;
 }

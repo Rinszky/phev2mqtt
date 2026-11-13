@@ -2,7 +2,7 @@
 
 > **Verzió:** 1.0.0  
 > **Céljármű:** Mitsubishi Outlander PHEV (2013–2024) / Eclipse Cross PHEV  
-> **Cél:** Gyári szintű, plug-and-play, "out-of-the-box" hardvermodul építése, amely folyamatos távoli elérést és Home Assistant integrációt biztosít 4G LTE-n és WireGuard VPN-en keresztül.
+> **Cél:** LTE kapcsolaton át MQTT-hez csatlakozó hardvermodul építése, amely az autó Wi-Fi-jén keresztül kommunikál a járművel.
 
 ---
 
@@ -26,7 +26,7 @@ Az Outlander PHEV gyári távvezérlése kizárólag a gépkocsi saját 2.4 GHz-
 A **PHEV-Bridge LTE** egy dobozolt, gépjárműbe rejtett átjáró, amely:
 1. **Belső Wi-Fi rádión** folyamatosan az autó Wi-Fi AP-jára csatlakozik (`192.168.8.46:8080`).
 2. **4G LTE modemen** keresztül mobilinternetet biztosít.
-3. **Beépített WireGuard VPN alagutat** hoz létre az otthoni hálózatod felé, kikerülve a mobilnetes NAT-ot és tűzfalakat.
+3. **SIM-kártyás LTE kapcsolaton** keresztül közvetlenül csatlakozik az MQTT brokerhez.
 4. **Kétirányú MQTT átjáróként** publikálja az akkumulátor, hűtés/fűtés, ajtó- és töltésadatokat a Home Assistant felé, valamint fogadja a vezérlőparancsokat.
 5. **Védi a 12V-os segédakkumulátort**: méri a feszültséget, és ha a jármű 3-4 napig nincs töltőn, automatikusan ultra-alacsony fogyasztású alvó módba (Duty-Cycle Deep Sleep, < 3 mA) kapcsol.
 
@@ -45,7 +45,6 @@ flowchart LR
     end
 
     subgraph CloudHome ["Otthoni Hálózat (Home LAN)"]
-        WG["WireGuard Szerver\n(10.0.0.1)"]
         MQTT["Mosquitto MQTT Broker"]
         HA["Home Assistant"]
     end
@@ -54,8 +53,8 @@ flowchart LR
     BAT12 ==> DCDC ==> ESP & MODEM
     BAT12 -.-> SENSE -.-> ESP
     ESP <== "UART AT / PPP" ==> MODEM
-    MODEM <== "4G LTE Cellular" ==> WG
-    WG <==> MQTT <==> HA
+    MODEM <== "4G LTE Cellular" ==> MQTT
+    MQTT <==> HA
 ```
 
 ---
@@ -225,33 +224,15 @@ Ezért **NEM kell vezetékeket behúzni a műszerfalig**: a csomagtartó jobb ol
 
 ---
 
-## 7. Szoftveres felprogramozás (Provisioning)
+## 7. Szoftveres felprogramozás és párosítás
 
-### 1. Konfiguráció beállítása
-Nyisd meg az [`esp32-s3/include/config.h`](file:///Volumes/work/work/private/phev2mqtt/esp32-s3/include/config.h) fájlt, és add meg a saját járműved és otthoni rendszered adatait:
+1. Tegyél a modembe aktív, mobilinternetre képes SIM-kártyát; a SIM PIN-kérés legyen kikapcsolva.
+2. Töltsd fel a firmware-t USB-n keresztül az alábbi PlatformIO parancsokkal.
+3. Első induláskor csatlakozz a `PHEV-Bridge-Setup` Wi-Fi hotspothoz, és nyisd meg a `http://192.168.4.1` címet.
+4. Add meg a 17 karakteres VIN-t és az admin felületen létrehozott pairing code-ot. A backend járműrekordjában már szerepelnie kell az autó Wi-Fi SSID-jének és jelszavának.
+5. A telefon mobiladat-kapcsolatán keresztül a portál lekéri az autó Wi-Fi és MQTT hitelesítési adatait, majd elmenti az ESP32-be.
 
-```cpp
-// 1. Autó Wi-Fi adatai (a szervizkönyvben vagy az autón lévő matricán található)
-#define DEFAULT_PHEV_WIFI_SSID       "REMOTE12a34b"
-#define DEFAULT_PHEV_WIFI_PASSWORD   "abc123456789"
-
-// 2. LTE Mobilnet APN
-#define DEFAULT_LTE_APN              "net" // Telekom: "net" vagy "internet", Yettel: "net", Digi: "internet"
-
-// 3. WireGuard VPN kulcsok (az otthoni WireGuard szerverről)
-#define DEFAULT_WG_LOCAL_IP          "10.0.0.50"
-#define DEFAULT_WG_PRIVATE_KEY       "eKv...=" 
-#define DEFAULT_WG_ENDPOINT_HOST     "sajatdomain.duckdns.org"
-#define DEFAULT_WG_ENDPOINT_PORT     51820
-#define DEFAULT_WG_PEER_PUBKEY       "8Bf...="
-
-// 4. MQTT Szerver (az otthoni szerver VPN IP címe)
-#define DEFAULT_MQTT_SERVER          "10.0.0.1"
-#define DEFAULT_MQTT_PORT            1883
-#define DEFAULT_MQTT_USER            "homeassistant_mqtt"
-#define DEFAULT_MQTT_PASS            "titkosjelszo"
-#define DEFAULT_MQTT_PREFIX          "phev"
-```
+Állítsd a backend `.env` fájljában a `PUBLIC_MQTT_URL` értékét erre: `wss://mqtt.lorinszkym.synology.me:443/mqtt`, majd indítsd újra a backendet. A Synology reverse proxy a HTTPS 443-as forgalmat a `localhost:8083` HTTP WebSocket listenerre továbbítsa, az `/mqtt` útvonalat és a WebSocket upgrade-et engedélyezve. Ha a jármű rekordjának saját `mqtt_broker_url` értéke van, azt is frissítsd erre az URL-re. Párosítsd újra az ESP32-t, hogy letöltse az új beállítást.
 
 ### 2. Fordítás és feltöltés USB-n keresztül
 Csatlakoztasd az ESP32-S3 USB-C portját a számítógépedhez:
@@ -288,13 +269,7 @@ Mielőtt véglegesen lezárnád a dobozt és beépítenéd az autóba, végezd e
   [LTE] Operator: Telekom HU, CSQ: 24 (RSSI: -65 dBm)
   [LTE] LTE Connected! Cellular IP: 10.xx.xx.xx
   ```
-- [ ] **3. WireGuard VPN alagút:**
-  ```text
-  [VPN] Initializing WireGuard VPN tunnel...
-  [VPN] WireGuard tunnel started successfully!
-  ```
-  Otthoni gépről ellenőrizd a pinget: `ping 10.0.0.50`.
-- [ ] **4. Autó Wi-Fi kapcsolat és Rolling XOR kézfogás:**
+- [ ] **3. Autó Wi-Fi kapcsolat és Rolling XOR kézfogás:**
   Állj az autó közelébe, kapcsold be a modult:
   ```text
   [PHEV] Wi-Fi connected to REMOTE12a34b (RSSI: -48 dBm)
@@ -303,15 +278,10 @@ Mielőtt véglegesen lezárnád a dobozt és beépítenéd az autóba, végezd e
   [PHEV] Car VIN: JMBXDGG2W...
   [PHEV] Battery: 100% (raw 94%, maxSoc 94%), ParkingLights: OFF
   ```
-- [ ] **5. Home Assistant Auto-Discovery:**
+- [ ] **4. Home Assistant Auto-Discovery:**
   Nyisd meg a Home Assistantot $\rightarrow$ Beállítások $\rightarrow$ Eszközök és szolgáltatások $\rightarrow$ MQTT.  
   Meg kell jelennie a **Mitsubishi Outlander PHEV** eszköznek az összes szenzorral és kapcsolóval (Akkumulátor %, Fűtés/Hűtés kapcsoló, Ajtók, 12V akku feszültség).
-- [ ] **6. Távoli CLI parancssor és OTA teszt:**
-  Az otthoni hálózatról lépj be:
-  ```bash
-  telnet 10.0.0.50 2222
-  ```
-  Írd be a jelszót (`phevadmin`), majd add ki a `status` és a `logs` parancsot!
+- [ ] **5. MQTT kapcsolat:** ellenőrizd a backend naplóiban és a brokerben, hogy az eszköz a VIN-hez tartozó device ID-val csatlakozik.
 
 ---
 
@@ -323,7 +293,7 @@ Mielőtt véglegesen lezárnád a dobozt és beépítenéd az autóba, végezd e
 | **A modem nem lát hálózatot (`waitForNetwork` timeout)** | Nincs térerő vagy hibás antenna / PIN kód | Ellenőrizd, hogy a SIM kártya PIN kérése ki van-e kapcsolva telefonban. Győződj meg róla, hogy az antenna az `LTE MAIN` csatlakozóra van tekerve, nem a `GNSS / GPS` aljzatra. |
 | **Wi-Fi nem kapcsolódik az autóhoz (`WL_DISCONNECTED`)** | Túl sok regisztrált telefon az autóban | Az Outlander Wi-Fi modulja egyszerre maximum **2 regisztrált eszközt (MAC címet)** engedélyez. Ha már két telefon regisztrálva van, az autó gyári menüjében (vagy a távirányító gombjának 10-szeri megnyomásával) törölni kell a korábbi párosításokat! |
 | **A Home Assistantban az akku 5%-ra ugrik** | Régi kódhiba | Ellenőrizd a `phev_client.cpp`-ben a `processBatteryGlitchFilter` meglétét: a modul automatikusan kiszűri a felébredéskor érkező téves 5%-os értékeket. |
-| **A WireGuard nem csatlakozik (`Handshake timeout`)** | Helytelen porttovábbítás vagy kulcs | Ellenőrizd az otthoni routereden az 51820-as UDP port nyitását. Győződj meg róla, hogy az otthoni `AllowedIPs`-be bekerült a `10.0.0.50/32`. |
+| **Az eszköz nem csatlakozik az MQTT brokerhez** | WSS URL, reverse proxy WebSocket beállítás, LTE időszinkron vagy eszköz-hitelesítés | Ellenőrizd a `wss://...:443/mqtt` URL-t, a 443 → `localhost:8083` proxy útvonalat, a proxy WebSocket támogatását és a soros napló TLS/MQTT hibáit; szükség esetén párosítsd újra a VIN-nel és pairing code-dal. |
 | **12V alacsony feszültség riasztás (< 11.9V)** | Rosszul kalibrált feszültségosztó | Mérd meg multiméterrel a valós feszültséget az akkumulátoron. A `config.h`-ban lévő `BATTERY_12V_DIVIDER_RATIO` értéket állítsd arányosan, amíg a szoftver által kiírt érték pontosan meg nem egyezik a multiméterrel. |
 
 ---

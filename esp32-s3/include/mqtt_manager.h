@@ -7,6 +7,7 @@
 #include "phev_client.h"
 #include "cellular_modem.h"
 #include "obd_reader.h"
+#include "wss_mqtt_client.h"
 
 class MqttManager {
 public:
@@ -18,6 +19,7 @@ public:
                const char* user,
                const char* pass,
                const char* prefix,
+               const char* websocketPath,
                PhevClient* phevClient,
                CellularModem* modem = nullptr,
                ObdReader* obdReader = nullptr);
@@ -33,6 +35,7 @@ public:
     void setHAPrefix(const char* p) { m_haPrefix = p; }
 
 private:
+    WssMqttClient m_wssClient;
     PubSubClient m_mqtt;
     String m_server;
     uint16_t m_port;

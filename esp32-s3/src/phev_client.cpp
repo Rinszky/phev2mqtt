@@ -36,7 +36,7 @@ bool PhevClient::begin(const char* ssid, const char* password) {
     WiFi.mode(WIFI_STA);
     
     // Set static IP on Wi-Fi STA to avoid waiting for car's slow DHCP
-    // Note: Default gateway for Internet/VPN is routed through cellular!
+    // Car Wi-Fi is used only for vehicle telemetry; cellular remains the MQTT uplink.
     WiFi.config(CAR_STATIC_IP, CAR_GATEWAY, CAR_SUBNET);
     WiFi.begin(ssid, password);
 

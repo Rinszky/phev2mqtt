@@ -13,6 +13,7 @@ struct AppConfig {
     bool configured = false;
 
     // 1. Vehicle Wi-Fi
+    String vehicle_vin;
     String wifi_ssid;
     String wifi_pass;
     int battery_max_soc = 94;
@@ -23,19 +24,10 @@ struct AppConfig {
     String lte_user;
     String lte_pass;
 
-    // 3. WireGuard VPN
-    bool wg_enabled = true;
-    String wg_local_ip;
-    String wg_netmask;
-    String wg_endpoint_host;
-    int wg_endpoint_port = 51820;
-    String wg_private_key;
-    String wg_peer_pubkey;
-    String wg_allowed_ips;
-
-    // 4. MQTT & Home Assistant
+    // 3. MQTT & Home Assistant
     String mqtt_server;
     int mqtt_port = 1883;
+    String mqtt_path;
     String mqtt_user;
     String mqtt_pass;
     String mqtt_prefix;

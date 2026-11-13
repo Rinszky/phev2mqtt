@@ -1529,6 +1529,12 @@ func (m *mqttClient) handlePhev() error {
 	defer func() {
 		_ = phev.Close()
 		m.clearPhevIfMatch(phev)
+		// Publish vehicle availability as soon as this TCP session ends. The
+		// periodic 30s watchdog is a fallback for a stalled loop, not the normal
+		// disconnect signal used by mobile push notifications.
+		if m.client != nil && m.client.IsConnected() {
+			m.client.Publish(m.topic("/available"), 0, true, "offline")
+		}
 
 		m.mu.Lock()
 		wasOperating := m.climate.operating || (m.climate.state != nil && *m.climate.state == protocol.PreACOn)
@@ -2272,20 +2278,6 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 			},
 		},
 		{
-			component: "sensor",
-			suffix:    "battery_raw_level",
-			fields: map[string]interface{}{
-				"device_class":        "battery",
-				"entity_category":     "diagnostic",
-				"name":                name + " Battery (Raw BMU)",
-				"icon":                "mdi:battery-high",
-				"state_topic":         "~/battery/raw_level",
-				"state_class":         "measurement",
-				"unit_of_measurement": "%",
-				"avty_t":              sensAvty,
-			},
-		},
-		{
 			component: "binary_sensor",
 			suffix:    "battery_warning",
 			fields: map[string]interface{}{
@@ -2995,6 +2987,11 @@ func (m *mqttClient) publishHomeAssistantDiscovery(vin, topic, name string) {
 				},
 			},
 		)
+	}
+	// Remove the previously published raw SOC entity from Home Assistant.
+	staleRawSOCConfig := fmt.Sprintf("%s/sensor/%s_battery_raw_level/config", m.haDiscoveryPrefix, vin)
+	if token := m.client.Publish(staleRawSOCConfig, 0, true, []byte{}); token.Wait() && token.Error() != nil {
+		log.Errorf("Error removing stale raw SOC discovery config %s: %v", staleRawSOCConfig, token.Error())
 	}
 
 	for _, ent := range entities {
