@@ -562,6 +562,9 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 		if startToken != "" {
 			targetToken = startToken
 			event = "start"
+			// A token from a previous session is dead; the new one will arrive from the app.
+			a.tokens.Charging = ""
+			a.saveTokens()
 		} else if token != "" {
 			targetToken = token
 			event = "start"
@@ -777,6 +780,10 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 		if startToken != "" {
 			targetToken = startToken
 			event = "start"
+			// Stale tokens from earlier sessions must never receive updates/ends.
+			a.tokens.Climate = ""
+			a.knownClimateTokens = make(map[string]time.Time)
+			a.saveTokens()
 		} else if token != "" {
 			targetToken = token
 			event = "update"
