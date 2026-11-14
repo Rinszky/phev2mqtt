@@ -1966,12 +1966,12 @@ func (m *mqttClient) publishRegister(cl *client.Client, msg *protocol.PhevMessag
 		m.publish("/door/rear_right", boolOpen[reg.RearRight])
 		m.publish("/door/driver", boolOpen[reg.Driver])
 		m.publish("/door/front_passenger", boolOpen[reg.FrontPassenger])
-		if steering == "LHD" {
-			m.publish("/door/front_left", boolOpen[reg.Driver])
-			m.publish("/door/front_right", boolOpen[reg.FrontPassenger])
-		} else {
+		if steering == "RHD" {
 			m.publish("/door/front_right", boolOpen[reg.Driver])
 			m.publish("/door/front_left", boolOpen[reg.FrontPassenger])
+		} else {
+			m.publish("/door/front_left", boolOpen[reg.Driver])
+			m.publish("/door/front_right", boolOpen[reg.FrontPassenger])
 		}
 		m.publish("/door/bonnet", boolOpen[reg.Bonnet])
 		m.publish("/door/boot", boolOpen[reg.Boot])

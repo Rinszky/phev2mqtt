@@ -1694,9 +1694,9 @@ func (r *RegisterVehicleVariant) Decode(m *PhevMessage) {
 	r.SteeringRaw = m.Data[1]
 	switch m.Data[1] {
 	case 1:
-		r.SteeringSide = "RHD"
-	case 2:
 		r.SteeringSide = "LHD"
+	case 2:
+		r.SteeringSide = "RHD"
 	default:
 		r.SteeringSide = "unknown"
 	}
@@ -1707,9 +1707,9 @@ func (r *RegisterVehicleVariant) Encode() *PhevMessage {
 	data := []byte{r.Variant, r.SteeringRaw, 0x00}
 	if data[1] == 0 {
 		switch r.SteeringSide {
-		case "RHD":
-			data[1] = 1
 		case "LHD":
+			data[1] = 1
+		case "RHD":
 			data[1] = 2
 		}
 	}
