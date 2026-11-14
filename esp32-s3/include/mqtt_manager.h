@@ -50,10 +50,15 @@ private:
     ObdReader* m_obd;
     uint32_t m_lastConnectAttempt;
     uint32_t m_lastStatePublish;
+    bool m_pendingOta;
+    String m_pendingOtaUrl;
+    String m_pendingOtaVersion;
+    String m_pendingOtaSha256;
 
     String topic(const String& subTopic);
     String topic(const char* subTopic);
     void subscribeCommands();
+    void publishOtaStatus(const char* state, int progress, const char* version, const char* error = nullptr);
     void handleMessage(char* topic, uint8_t* payload, unsigned int length);
     static void callbackStatic(char* topic, uint8_t* payload, unsigned int length);
 };

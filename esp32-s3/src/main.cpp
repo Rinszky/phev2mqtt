@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_ota_ops.h>
 #include "config.h"
 #include "config_manager.h"
 #include "logger.h"
@@ -114,6 +115,17 @@ void loop() {
 
     // 4. Maintain MQTT Connection & Command Handling
     s_mqtt.loop();
+
+    static bool s_otaConfirmed = false;
+    if (!s_otaConfirmed && s_mqtt.isConnected()) {
+        s_otaConfirmed = true;
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        esp_ota_img_states_t otaState;
+        if (running && esp_ota_get_state_partition(running, &otaState) == ESP_OK && otaState == ESP_OTA_IMG_PENDING_VERIFY) {
+            LOG_I(TAG, "Confirming new OTA firmware partition as valid!");
+            esp_ota_mark_app_valid_cancel_rollback();
+        }
+    }
 
     // 5. Battery Protection & Duty Cycle Sleep Monitoring
     s_power.loop();

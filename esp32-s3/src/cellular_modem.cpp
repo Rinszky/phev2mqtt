@@ -304,3 +304,24 @@ Client* CellularModem::getNetworkClient() {
 Client* CellularModem::getSecureNetworkClient() {
     return s_pSecureClient;
 }
+
+Client* CellularModem::createOtaClient(bool secure) {
+    if (!s_pModem) return nullptr;
+    TinyGsmClient* gsm = new TinyGsmClient(*s_pModem, 1);
+    if (!secure) {
+        return gsm;
+    }
+    SSLClientESP32* ssl = new SSLClientESP32(gsm);
+    ssl->setCACert(ISRG_ROOT_X1);
+    return ssl;
+}
+
+void CellularModem::destroyOtaClient(Client* client, bool secure) {
+    if (!client) return;
+    client->stop();
+    if (secure) {
+        delete static_cast<SSLClientESP32*>(client);
+    } else {
+        delete static_cast<TinyGsmClient*>(client);
+    }
+}

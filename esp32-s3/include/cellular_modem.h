@@ -25,6 +25,8 @@ public:
 
     Client* getNetworkClient();
     Client* getSecureNetworkClient();
+    Client* createOtaClient(bool secure);
+    void destroyOtaClient(Client* client, bool secure);
 
     // GPS / GNSS Tracking
     bool enableGPS();

@@ -1,4 +1,6 @@
 #include "mqtt_manager.h"
+#include "config.h"
+#include "ota_manager.h"
 #include "logger.h"
 #include <ArduinoJson.h>
 
@@ -14,7 +16,8 @@ MqttManager::MqttManager()
       m_modem(nullptr),
       m_obd(nullptr),
       m_lastConnectAttempt(0),
-      m_lastStatePublish(0) {
+      m_lastStatePublish(0),
+      m_pendingOta(false) {
     s_instance = this;
 }
 
@@ -78,8 +81,22 @@ void MqttManager::subscribeCommands() {
     m_mqtt.subscribe(topic("/lights/+/set").c_str());
     m_mqtt.subscribe(topic("/locate/set").c_str());
     m_mqtt.subscribe(topic("/system/+/set").c_str());
+    m_mqtt.subscribe(topic("/ota/command").c_str());
     m_mqtt.subscribe("homeassistant/status"); // Listen for HA restart
     LOG_I(TAG, "Subscribed to MQTT command topics");
+}
+
+void MqttManager::publishOtaStatus(const char* state, int progress, const char* version, const char* error) {
+    if (!m_mqtt.connected()) return;
+    JsonDocument doc;
+    doc["state"] = state;
+    doc["progress"] = progress;
+    doc["version"] = version ? version : FIRMWARE_VERSION;
+    if (error && strlen(error) > 0) doc["error"] = error;
+    String out;
+    serializeJson(doc, out);
+    publish("/ota/status", out.c_str(), true);
+    m_mqtt.loop();
 }
 
 void MqttManager::loop() {
@@ -94,6 +111,8 @@ void MqttManager::loop() {
             if (m_mqtt.connect(clientId.c_str(), m_user.c_str(), m_pass.c_str(), willTopic.c_str(), 1, true, "offline")) {
                 LOG_I(TAG, "MQTT connected successfully!");
                 publish("/status", "online", true);
+                publish("/ota/current_version", FIRMWARE_VERSION, true);
+                publishOtaStatus("idle", 0, FIRMWARE_VERSION);
                 subscribeCommands();
                 if (m_haDiscovery && !m_haPublished) {
                     publishDiscovery();
@@ -107,6 +126,16 @@ void MqttManager::loop() {
     }
 
     m_mqtt.loop();
+
+    if (m_pendingOta) {
+        m_pendingOta = false;
+        String url = m_pendingOtaUrl;
+        String ver = m_pendingOtaVersion;
+        String sha = m_pendingOtaSha256;
+        OTAManager::performOTA(m_modem, url.c_str(), sha.c_str(), [this, ver](const char* state, int pct, const char* err) {
+            publishOtaStatus(state, pct, ver.c_str(), err);
+        });
+    }
 
     uint32_t now = millis();
     if (now - m_lastStatePublish > 10000) {
@@ -343,6 +372,23 @@ void MqttManager::handleMessage(char* topicStr, uint8_t* payload, unsigned int l
         LOG_W(TAG, "Remote reboot requested via MQTT! Restarting in 1s...");
         delay(1000);
         ESP.restart();
+    }
+    // OTA Firmware Update Command
+    else if (t == topic("/ota/command")) {
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, p);
+        if (!err && String((const char*)(doc["action"] | "")) == "start") {
+            String url = doc["url"] | "";
+            String ver = doc["version"] | "";
+            String sha = doc["sha256"] | "";
+            if (url.length() > 0) {
+                LOG_I(TAG, "Scheduled OTA update to %s (%s)", ver.c_str(), url.c_str());
+                m_pendingOtaUrl = url;
+                m_pendingOtaVersion = ver;
+                m_pendingOtaSha256 = sha;
+                m_pendingOta = true;
+            }
+        }
     }
 }
 

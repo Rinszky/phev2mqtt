@@ -36,6 +36,7 @@
 #define DEFAULT_LTE_PASS             ""
 #define DEFAULT_BACKEND_API_URL      "https://api.lorinszkym.synology.me"
 #define CONFIGURATION_VERSION        2
+#define FIRMWARE_VERSION             "1.0.0"
 
 // ==============================================================================
 // 3. GPS / GNSS VEHICLE TRACKING (Home Assistant Device Tracker)
