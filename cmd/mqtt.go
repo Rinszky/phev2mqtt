@@ -695,6 +695,9 @@ func (m *mqttClient) onMqttConnect(c mqtt.Client) {
 	if token := c.Subscribe(m.topic("/apns/#"), 0, nil); token.Wait() && token.Error() != nil {
 		log.Errorf("Error subscribing to /apns/#: %v", token.Error())
 	}
+	if token := c.Subscribe(m.topic("/ota/command"), 1, nil); token.Wait() && token.Error() != nil {
+		log.Errorf("Error subscribing to /ota/command: %v", token.Error())
+	}
 	if m.prefix != "phev" {
 		if token := c.Subscribe("phev/apns/#", 0, nil); token.Wait() && token.Error() != nil {
 			log.Debugf("Error subscribing to phev/apns/#: %v", token.Error())
@@ -708,6 +711,7 @@ func (m *mqttClient) onMqttConnect(c mqtt.Client) {
 	}
 
 	m.republishAllDiscoveryAndState()
+	m.initOtaOnConnect()
 }
 
 func (m *mqttClient) republishAllDiscoveryAndState() {
@@ -783,6 +787,11 @@ func (m *mqttClient) handleIncomingMqtt(mqttClientConn mqtt.Client, msg mqtt.Mes
 		return
 	}
 	relTopic := strings.TrimPrefix(fullTopic, m.prefix)
+
+	if relTopic == "/ota/command" {
+		m.handleOtaCommand(payloadStr)
+		return
+	}
 
 	if relTopic == "/connection" {
 		switch strings.ToLower(payloadStr) {
