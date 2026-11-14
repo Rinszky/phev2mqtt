@@ -27,14 +27,35 @@ import (
 	"github.com/spf13/viper"
 )
 
+type NotificationPrefs struct {
+	Connection *bool `json:"connection,omitempty"`
+	Charging   *bool `json:"charging,omitempty"`
+	Climate    *bool `json:"climate,omitempty"`
+}
+
 type APNsTokens struct {
-	Charging            string   `json:"charging"`
-	Climate             string   `json:"climate"`
-	KnownClimateTokens  []string `json:"known_climate_tokens,omitempty"`
-	PushToStartCharging string   `json:"push_to_start_charging"`
-	PushToStartClimate  string   `json:"push_to_start_climate"`
-	FCM                 string   `json:"fcm,omitempty"`
-	KnownFCMTokens      []string `json:"known_fcm_tokens,omitempty"`
+	Charging            string            `json:"charging"`
+	Climate             string            `json:"climate"`
+	KnownClimateTokens  []string          `json:"known_climate_tokens,omitempty"`
+	PushToStartCharging string            `json:"push_to_start_charging"`
+	PushToStartClimate  string            `json:"push_to_start_climate"`
+	FCM                 string            `json:"fcm,omitempty"`
+	KnownFCMTokens      []string          `json:"known_fcm_tokens,omitempty"`
+	Prefs               NotificationPrefs `json:"prefs,omitempty"`
+}
+
+func (a *APNsClient) isChargingNotifyEnabled() bool {
+	if a.tokens.Prefs.Charging != nil && !*a.tokens.Prefs.Charging {
+		return false
+	}
+	return true
+}
+
+func (a *APNsClient) isClimateNotifyEnabled() bool {
+	if a.tokens.Prefs.Climate != nil && !*a.tokens.Prefs.Climate {
+		return false
+	}
+	return true
 }
 
 type APNsClient struct {
@@ -317,6 +338,16 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 			a.tokens.PushToStartClimate = token
 			changed = true
 		}
+	case "prefs", "notification_prefs":
+		var prefs NotificationPrefs
+		if err := json.Unmarshal([]byte(token), &prefs); err == nil {
+			a.tokens.Prefs = prefs
+			changed = true
+			log.Infof("[APNs] Updated notification prefs: connection=%v, charging=%v, climate=%v",
+				prefs.Connection == nil || *prefs.Connection,
+				prefs.Charging == nil || *prefs.Charging,
+				prefs.Climate == nil || *prefs.Climate)
+		}
 	default:
 		// Try parsing as JSON object
 		var parsed map[string]string
@@ -557,6 +588,10 @@ func (a *APNsClient) UpdateCharging(soc int, remainingMins int, completionTime s
 	}
 
 	a.mu.Lock()
+	if !a.isChargingNotifyEnabled() {
+		a.mu.Unlock()
+		return
+	}
 	token := a.tokens.Charging
 	startToken := a.tokens.PushToStartCharging
 	now := time.Now()
@@ -769,6 +804,10 @@ func (a *APNsClient) UpdateClimate(mode string, modeName string, remainingMins i
 	}
 
 	a.mu.Lock()
+	if !a.isClimateNotifyEnabled() {
+		a.mu.Unlock()
+		return
+	}
 	token := a.tokens.Climate
 	startToken := a.tokens.PushToStartClimate
 	now := time.Now()
