@@ -277,6 +277,7 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 	}
 
 	changed := false
+	endLateClimateToken := false
 
 	switch normalizedType {
 	case "fcm", "android", "fcm_climate":
@@ -295,6 +296,16 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 		if a.tokens.Climate != token {
 			a.tokens.Climate = token
 			changed = true
+		}
+		// ActivityKit may deliver the session token after the car has already
+		// reported climate-off. Close that late activity immediately instead of
+		// leaving a stale Live Activity visible on the phone.
+		if a.climatePendingEnd {
+			if time.Since(a.climatePendingEndAt) <= 5*time.Minute {
+				endLateClimateToken = true
+			}
+			a.climatePendingEnd = false
+			a.climatePendingEndAt = time.Time{}
 		}
 	case "push_to_start_charging", "push_to_start":
 		if a.tokens.PushToStartCharging != token {
@@ -341,6 +352,11 @@ func (a *APNsClient) SetToken(tokenType string, token string) {
 		log.Infof("[APNs] Updated and persisted %s push token: %s", tokenType, token)
 	}
 	a.mu.Unlock()
+
+	if endLateClimateToken {
+		log.Infof("[APNs] Climate token arrived after climate ended; immediately ending the late Live Activity")
+		go a.sendEndClimateToToken(token)
+	}
 }
 
 // removeInvalidFCMToken forgets tokens that FCM has definitively revoked.
@@ -935,6 +951,10 @@ func (a *APNsClient) EndClimate(mode string, modeName string) {
 		if t != "" {
 			tokensToDismiss[t] = true
 		}
+	}
+	if a.privateKey != nil && len(tokensToDismiss) == 0 {
+		a.climatePendingEnd = true
+		a.climatePendingEndAt = time.Now()
 	}
 	a.tokens.Climate = ""
 	a.knownClimateTokens = make(map[string]time.Time)
