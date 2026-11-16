@@ -232,7 +232,7 @@ Ezért **NEM kell vezetékeket behúzni a műszerfalig**: a csomagtartó jobb ol
 4. Add meg a 17 karakteres VIN-t és az admin felületen létrehozott pairing code-ot. A backend járműrekordjában már szerepelnie kell az autó Wi-Fi SSID-jének és jelszavának.
 5. A telefon mobiladat-kapcsolatán keresztül a portál lekéri az autó Wi-Fi és MQTT hitelesítési adatait, majd elmenti az ESP32-be.
 
-Állítsd a backend `.env` fájljában a `PUBLIC_MQTT_URL` értékét erre: `wss://mqtt.lorinszkym.synology.me:443/mqtt`, majd indítsd újra a backendet. A Synology reverse proxy a HTTPS 443-as forgalmat a `localhost:8083` HTTP WebSocket listenerre továbbítsa, az `/mqtt` útvonalat és a WebSocket upgrade-et engedélyezve. Ha a jármű rekordjának saját `mqtt_broker_url` értéke van, azt is frissítsd erre az URL-re. Párosítsd újra az ESP32-t, hogy letöltse az új beállítást.
+Állítsd a backend `.env` fájljában a `PUBLIC_MQTT_URL` értékét erre: `wss://mqtt.outlanderconnect.eu/mqtt`, majd indítsd újra a backendet. A reverse proxy a HTTPS 443-as forgalmat a `localhost:8083` HTTP WebSocket listenerre továbbítsa, az `/mqtt` útvonalat és a WebSocket upgrade-et engedélyezve. Ha a jármű rekordjának saját `mqtt_broker_url` értéke van, azt is frissítsd erre az URL-re. Párosítsd újra az ESP32-t, hogy letöltse az új beállítást.
 
 ### 2. Fordítás és feltöltés USB-n keresztül
 Csatlakoztasd az ESP32-S3 USB-C portját a számítógépedhez:

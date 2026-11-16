@@ -12,7 +12,7 @@ Az ESP32-S3 firmware az Outlander saját Wi-Fi hálózatán keresztül olvassa �
 
 Az ESP32 LTE-kapcsolaton át MQTT-t használ WebSocket Secure (WSS) felett, így a routeren elérhető HTTPS 443-as port elegendő. A firmware TLS-sel ellenőrzi a broker tanúsítványát, majd WebSocketen továbbítja az MQTT-kereteket.
 
-A jelenlegi nyilvános MQTT URL: `wss://mqtt.lorinszkym.synology.me:443/mqtt`. A Synology reverse proxy HTTPS forrásának a 443-as porton kell fogadnia a `mqtt.lorinszkym.synology.me` hostnevet, engedélyezett WebSocket upgrade-del, majd HTTP-n a NAS `localhost:8083` címére kell továbbítania a kérést. Az MQTT WebSocket listener útvonala `/mqtt`. A backend `.env` `PUBLIC_MQTT_URL` értékét, illetve egyedi járműrekordok `mqtt_broker_url` mezőjét is erre a WSS URL-re állítsd.
+A jelenlegi nyilvános MQTT URL: `wss://mqtt.outlanderconnect.eu/mqtt`. A reverse proxy HTTPS forrásának a 443-as porton kell fogadnia a `mqtt.outlanderconnect.eu` hostnevet, engedélyezett WebSocket upgrade-del, majd HTTP-n a `localhost:8083` címére kell továbbítania a kérést. Az MQTT WebSocket listener útvonala `/mqtt`. A backend `.env` `PUBLIC_MQTT_URL` értékét, illetve egyedi járműrekordok `mqtt_broker_url` mezőjét is erre a WSS URL-re állítsd.
 
 ## Működés
 

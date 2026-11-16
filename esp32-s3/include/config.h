@@ -34,7 +34,7 @@
 #define DEFAULT_LTE_APN              ""
 #define DEFAULT_LTE_USER             ""
 #define DEFAULT_LTE_PASS             ""
-#define DEFAULT_BACKEND_API_URL      "https://api.lorinszkym.synology.me"
+#define DEFAULT_BACKEND_API_URL      "https://api.outlanderconnect.eu"
 #define CONFIGURATION_VERSION        2
 #define FIRMWARE_VERSION             "1.0.0"
 
