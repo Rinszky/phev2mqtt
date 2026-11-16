@@ -81,6 +81,8 @@ void MqttManager::subscribeCommands() {
     m_mqtt.subscribe(topic("/lights/+/set").c_str());
     m_mqtt.subscribe(topic("/locate/set").c_str());
     m_mqtt.subscribe(topic("/system/+/set").c_str());
+    m_mqtt.subscribe(topic("/obd/+/set").c_str());
+    m_mqtt.subscribe(topic("/obd/command").c_str());
     m_mqtt.subscribe(topic("/ota/command").c_str());
     m_mqtt.subscribe("homeassistant/status"); // Listen for HA restart
     LOG_I(TAG, "Subscribed to MQTT command topics");
@@ -235,52 +237,66 @@ void MqttManager::publishAllStates() {
         publish("/obd/connected", m_obd->isConnected() ? "connected" : "disconnected");
         publish("/obd/ecu_active", m_obd->isEcuResponding() ? "active" : "inactive");
 
-        if (m_obd->isEcuResponding()) {
+        if (m_obd->isConnected()) {
             ObdTelemetry t = m_obd->getTelemetry();
             char buf[32];
 
-            if (t.soh > 0.0f) {
-                snprintf(buf, sizeof(buf), "%.1f", t.soh);
-                publish("/obd/battery_soh", buf);
+            // 12V Aux Battery (always available via ELM327 ATRV)
+            if (t.aux12v > 5.0f) {
+                snprintf(buf, sizeof(buf), "%.2f", t.aux12v);
+                publish("/obd/aux_12v", buf);
+                publish("/obd/aux_12v_charging", t.aux12vCharging ? "charging" : "idle");
             }
-            if (t.capacityAh > 0.0f) {
-                snprintf(buf, sizeof(buf), "%.1f", t.capacityAh);
-                publish("/obd/battery_capacity_ah", buf);
-            }
-            if (t.cellVoltageMin > 0) {
-                publish("/obd/cell_min_mv", (int)t.cellVoltageMin);
-                publish("/obd/cell_max_mv", (int)t.cellVoltageMax);
-                publish("/obd/cell_delta_mv", (int)t.cellVoltageDelta);
-                publish("/obd/cell_avg_mv", (int)t.cellVoltageAvg);
-            }
-            if (t.tempMin > -40) {
-                publish("/obd/battery_temp_min", (int)t.tempMin);
-                publish("/obd/battery_temp_max", (int)t.tempMax);
-                publish("/obd/battery_temp_avg", (int)t.tempAvg);
-            }
-            if (t.packVoltage > 50.0f) {
-                snprintf(buf, sizeof(buf), "%.1f", t.packVoltage);
-                publish("/obd/pack_voltage", buf);
-                snprintf(buf, sizeof(buf), "%.1f", t.packCurrent);
-                publish("/obd/pack_current", buf);
-                snprintf(buf, sizeof(buf), "%.2f", t.packPowerKw);
-                publish("/obd/pack_power_kw", buf);
-            }
-            if (t.fuelRemainingLiters > 0.0f) {
-                snprintf(buf, sizeof(buf), "%.1f", t.fuelRemainingLiters);
-                publish("/obd/fuel_liters", buf);
-            }
-            if (t.coolantTemp > -40) {
-                publish("/obd/coolant_temp", (int)t.coolantTemp);
-            }
-            if (t.odometer > 0) {
-                publish("/obd/odometer", (int)t.odometer);
-            }
-            if (abs(t.frontMotorKw) > 0.1f || abs(t.rearMotorKw) > 0.1f) {
-                snprintf(buf, sizeof(buf), "%.1f", t.frontMotorKw);
-                publish("/obd/motor_front_kw", buf);
-                snprintf(buf, sizeof(buf), "%.1f", t.rearMotorKw);
-                publish("/obd/motor_rear_kw", buf);
+
+            if (m_obd->isEcuResponding()) {
+                // DTC Fault Codes
+                publish("/obd/dtc_count", (int)t.dtcCount);
+                publish("/obd/dtc_codes", t.dtcCodes.c_str());
+                publish("/obd/dtc_status", t.dtcCount == 0 ? "clean" : "warning");
+
+                if (t.soh > 0.0f) {
+                    snprintf(buf, sizeof(buf), "%.1f", t.soh);
+                    publish("/obd/battery_soh", buf);
+                }
+                if (t.capacityAh > 0.0f) {
+                    snprintf(buf, sizeof(buf), "%.1f", t.capacityAh);
+                    publish("/obd/battery_capacity_ah", buf);
+                }
+                if (t.cellVoltageMin > 0) {
+                    publish("/obd/cell_min_mv", (int)t.cellVoltageMin);
+                    publish("/obd/cell_max_mv", (int)t.cellVoltageMax);
+                    publish("/obd/cell_delta_mv", (int)t.cellVoltageDelta);
+                    publish("/obd/cell_avg_mv", (int)t.cellVoltageAvg);
+                }
+                if (t.tempMin > -40) {
+                    publish("/obd/battery_temp_min", (int)t.tempMin);
+                    publish("/obd/battery_temp_max", (int)t.tempMax);
+                    publish("/obd/battery_temp_avg", (int)t.tempAvg);
+                }
+                if (t.packVoltage > 50.0f) {
+                    snprintf(buf, sizeof(buf), "%.1f", t.packVoltage);
+                    publish("/obd/pack_voltage", buf);
+                    snprintf(buf, sizeof(buf), "%.1f", t.packCurrent);
+                    publish("/obd/pack_current", buf);
+                    snprintf(buf, sizeof(buf), "%.2f", t.packPowerKw);
+                    publish("/obd/pack_power_kw", buf);
+                }
+                if (t.fuelRemainingLiters > 0.0f) {
+                    snprintf(buf, sizeof(buf), "%.1f", t.fuelRemainingLiters);
+                    publish("/obd/fuel_liters", buf);
+                }
+                if (t.coolantTemp > -40) {
+                    publish("/obd/coolant_temp", (int)t.coolantTemp);
+                }
+                if (t.odometer > 0) {
+                    publish("/obd/odometer", (int)t.odometer);
+                }
+                if (abs(t.frontMotorKw) > 0.1f || abs(t.rearMotorKw) > 0.1f) {
+                    snprintf(buf, sizeof(buf), "%.1f", t.frontMotorKw);
+                    publish("/obd/motor_front_kw", buf);
+                    snprintf(buf, sizeof(buf), "%.1f", t.rearMotorKw);
+                    publish("/obd/motor_rear_kw", buf);
+                }
             }
         }
     }
@@ -366,6 +382,16 @@ void MqttManager::handleMessage(char* topicStr, uint8_t* payload, unsigned int l
     // Locate (Horn/Hazard)
     else if (t == topic("/locate/set")) {
         m_phev->sendHornHazard(true, true);
+    }
+    // OBD Commands (Clear DTCs, Scan DTCs)
+    else if (t == topic("/obd/clear_dtc/set") || t == topic("/obd/command")) {
+        if (m_obd && (p.equalsIgnoreCase("clear") || p.equalsIgnoreCase("true") || p == "1" || p.indexOf("clear") >= 0)) {
+            LOG_I(TAG, "Clear DTC requested via MQTT! Executing on OBD adapter...");
+            m_obd->clearDtcs();
+            publish("/obd/dtc_count", 0);
+            publish("/obd/dtc_codes", "");
+            publish("/obd/dtc_status", "clean");
+        }
     }
     // System Commands
     else if (t == topic("/system/reboot/set")) {
@@ -488,6 +514,8 @@ void MqttManager::publishDiscovery() {
     // OBD2 & BMU Battery Health Sensors (PHEV Watchdog integration)
     publishSensor("binary_sensor", "obd/connected", "OBD Bluetooth Connected", "connectivity", nullptr, "mdi:bluetooth-connect");
     publishSensor("binary_sensor", "obd/ecu_active", "BMU ECU Diagnostics Active", "power", nullptr, "mdi:car-electric");
+    publishSensor("sensor", "obd/aux_12v", "12V Auxiliary Battery Voltage", "voltage", "V", "mdi:car-battery");
+    publishSensor("sensor", "obd/dtc_count", "OBD Fault Code Count", nullptr, nullptr, "mdi:alert-circle-outline");
     publishSensor("sensor", "obd/battery_soh", "Traction Battery SOH", nullptr, "%", "mdi:battery-heart");
     publishSensor("sensor", "obd/battery_capacity_ah", "Traction Battery Capacity", nullptr, "Ah", "mdi:battery-high");
     publishSensor("sensor", "obd/cell_min_mv", "Lowest Cell Voltage", "voltage", "mV", "mdi:battery-arrow-down");

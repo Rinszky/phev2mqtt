@@ -149,6 +149,9 @@ void ObdReader::runTask() {
 
         // Step 3: Diagnostic polling loop
         while (m_serialBt.connected()) {
+            queryAuxBattery();
+            vTaskDelay(pdMS_TO_TICKS(150));
+
             queryBmuStatus();
             vTaskDelay(pdMS_TO_TICKS(200));
 
@@ -170,6 +173,9 @@ void ObdReader::runTask() {
                 vTaskDelay(pdMS_TO_TICKS(200));
 
                 queryInverters();
+                vTaskDelay(pdMS_TO_TICKS(200));
+
+                queryDtcs();
 
                 // Normal active poll interval
                 vTaskDelay(pdMS_TO_TICKS(OBD_POLL_INTERVAL_SEC * 1000));
@@ -524,6 +530,82 @@ void ObdReader::queryInverters() {
             xSemaphoreGive(m_mutex);
         }
     }
+}
+
+// ------------------------------------------------------------------------------
+// 6. 12V Auxiliary Battery Voltage (ELM327 internal command: ATRV)
+// ------------------------------------------------------------------------------
+void ObdReader::queryAuxBattery() {
+    String resp = sendCommand("ATRV", 800);
+    // Standard response: "12.6V" or "14.4V"
+    resp.replace("V", "");
+    resp.replace("v", "");
+    resp.trim();
+    float v = resp.toFloat();
+    if (v > 5.0f && v < 18.0f) {
+        if (xSemaphoreTake(m_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            m_telemetry.aux12v = v;
+            m_telemetry.aux12vCharging = (v >= 13.5f);
+            xSemaphoreGive(m_mutex);
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------
+// 7. ECU Diagnostic Trouble Codes (DTC) (Mode 03 Request)
+// ------------------------------------------------------------------------------
+void ObdReader::queryDtcs() {
+    String resp = sendCommand("03", 1500);
+    if (resp.indexOf("NO DATA") >= 0 || resp.indexOf("43 00") >= 0) {
+        if (xSemaphoreTake(m_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            m_telemetry.dtcCount = 0;
+            m_telemetry.dtcCodes = "";
+            xSemaphoreGive(m_mutex);
+        }
+        return;
+    }
+
+    uint8_t buf[64];
+    size_t len = 0;
+    if (parseHexBytes(resp, buf, sizeof(buf), len)) {
+        uint8_t count = 0;
+        String codes = "";
+        for (size_t i = 0; i + 2 <= len; i += 2) {
+            if (buf[i] == 0x43) continue; // Skip response byte
+            uint16_t code = (buf[i] << 8) | buf[i + 1];
+            if (code == 0) continue;
+
+            char typeChar = 'P';
+            switch ((code >> 14) & 0x03) {
+                case 0: typeChar = 'P'; break;
+                case 1: typeChar = 'C'; break;
+                case 2: typeChar = 'B'; break;
+                case 3: typeChar = 'U'; break;
+            }
+            char dtcStr[10];
+            snprintf(dtcStr, sizeof(dtcStr), "%c%04X", typeChar, code & 0x3FFF);
+            if (codes.length() > 0) codes += ",";
+            codes += dtcStr;
+            count++;
+        }
+        if (xSemaphoreTake(m_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            m_telemetry.dtcCount = count;
+            m_telemetry.dtcCodes = codes;
+            xSemaphoreGive(m_mutex);
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------
+// 8. Clear Fault Codes (DTC) (Mode 04 & BMU UDS 14FFFFFF)
+// ------------------------------------------------------------------------------
+bool ObdReader::clearDtcs() {
+    LOG_I(TAG, "Executing Clear Diagnostic Trouble Codes (DTC)...");
+    sendCommand("04", 2000); // Standard OBD2 Clear
+    sendCommand("ATSH 761", 500); // BMU UDS Clear
+    sendCommand("14FFFFFF", 1000);
+    queryDtcs();
+    return true;
 }
 
 #endif // OBD_BLUETOOTH_ENABLED

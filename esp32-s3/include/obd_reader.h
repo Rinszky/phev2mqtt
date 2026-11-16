@@ -47,6 +47,14 @@ struct ObdTelemetry {
     // Electric Motors (Inverters: 0x757, 0x759)
     float frontMotorKw = 0.0f;      // Front electric motor power (kW)
     float rearMotorKw = 0.0f;       // Rear electric motor power (kW)
+
+    // 12V Auxiliary Battery (Pin 16 via ELM327 ATRV)
+    float aux12v = 0.0f;            // 12V auxiliary battery voltage (V)
+    bool aux12vCharging = false;    // DC-DC converter actively charging (>=13.6V)
+
+    // Diagnostic Trouble Codes (DTC)
+    uint8_t dtcCount = 0;           // Number of active ECU fault codes
+    String dtcCodes = "";           // Comma-separated list of active DTCs (e.g. "P1A15")
 };
 
 class ObdReader {
@@ -64,6 +72,7 @@ public:
     bool isConnected();
     bool isEcuResponding();
     ObdTelemetry getTelemetry();
+    bool clearDtcs();
 
 private:
 #if OBD_BLUETOOTH_ENABLED
@@ -90,6 +99,8 @@ private:
     void queryBatteryTemps();
     void queryEvEcu();
     void queryInverters();
+    void queryAuxBattery();
+    void queryDtcs();
 
     bool parseHexBytes(const String& response, uint8_t* outBuf, size_t maxLen, size_t& outLen);
 #endif
