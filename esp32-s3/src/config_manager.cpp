@@ -369,7 +369,9 @@ form.addEventListener("submit", async event => {
     if (!data.brokerUrl) throw new Error("A backend MQTT címe nincs beállítva.");
 
     const broker = new URL(data.brokerUrl);
-    if (broker.protocol !== "wss:" || !broker.hostname) throw new Error("A broker címnek wss:// formátumúnak kell lennie.");
+    if ((broker.protocol !== "wss:" && broker.protocol !== "ws:") || !broker.hostname) {
+      throw new Error("A broker címnek wss:// vagy ws:// formátumúnak kell lennie.");
+    }
 
     const settings = data.settings || {};
     const values = {
@@ -378,7 +380,7 @@ form.addEventListener("submit", async event => {
       wifi_pass: carPw,
       lte_apn: settings.lteApn || settings.lte_apn || "",
       mqtt_server: broker.hostname,
-      mqtt_port: broker.port || 443,
+      mqtt_port: broker.port || (broker.protocol === "wss:" ? 443 : 80),
       mqtt_path: broker.pathname || "/mqtt",
       mqtt_user: data.username,
       mqtt_pass: data.password,
