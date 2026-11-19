@@ -185,78 +185,224 @@ void ConfigManager::handleRoot() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Outlander Bridge párosítás</title>
+<title>Outlander Connect Beállítás</title>
 <style>
-:root{color-scheme:dark;--bg:#101722;--card:#1b2635;--accent:#19b7e5;--text:#f2f5f8;--muted:#aab7c5;--border:#344456}
-*{box-sizing:border-box;font-family:system-ui,-apple-system,sans-serif}
-body{margin:0;background:var(--bg);color:var(--text);padding:24px;display:grid;place-items:center;min-height:100vh}
-main{max-width:440px;width:100%;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:24px;box-shadow:0 18px 48px #0006}
-h1{font-size:22px;margin:0 0 8px}p{color:var(--muted);font-size:14px;line-height:1.5}
-label{display:block;margin:18px 0 6px;color:var(--muted);font-size:13px;font-weight:600}
-input{width:100%;padding:13px;border:1px solid var(--border);border-radius:10px;background:#101722;color:var(--text);font-size:16px}
-button{width:100%;margin-top:22px;padding:14px;border:0;border-radius:10px;background:var(--accent);color:#04202b;font-weight:700;font-size:16px}
-button:disabled{opacity:.6}#status{min-height:24px;color:#ffb4a9;margin-top:14px;font-size:14px}
+:root{color-scheme:dark;--bg:#0b111e;--card:#151f30;--accent:#38bdf8;--accent-hover:#0284c7;--text:#f8fafc;--muted:#94a3b8;--border:#26354a;--input:#0c1422;--success:#10b981}
+*{box-sizing:border-box;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body{margin:0;background:var(--bg);color:var(--text);padding:20px;display:grid;place-items:center;min-height:100vh}
+main{max-width:460px;width:100%;background:var(--card);border:1px solid var(--border);border-radius:20px;padding:26px;box-shadow:0 24px 64px rgba(0,0,0,.6)}
+.header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#0284c7,#38bdf8);display:flex;align-items:center;justify-content:center;font-size:18px}
+h1{font-size:22px;margin:0;font-weight:700}
+p{color:var(--muted);font-size:13.5px;line-height:1.5;margin:6px 0 16px}
+.form-group{margin-bottom:16px}
+.label-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+label{color:var(--text);font-size:13px;font-weight:600;display:block}
+.btn-scan{background:rgba(56,189,248,.15);border:1px solid rgba(56,189,248,.3);color:var(--accent);font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer;font-weight:600}
+.btn-scan:disabled{opacity:.5}
+.input-wrap{position:relative;display:flex;align-items:center}
+input,select{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--input);color:var(--text);font-size:15px;outline:none;transition:border-color .2s}
+input:focus,select:focus{border-color:var(--accent)}
+.btn-toggle-pw{position:absolute;right:10px;background:transparent;border:none;color:var(--muted);cursor:pointer;padding:6px;font-size:16px}
+.tip{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.4}
+button.submit-btn{width:100%;margin-top:10px;padding:14px;border:0;border-radius:12px;background:var(--accent);color:#041a2f;font-weight:700;font-size:16px;cursor:pointer;transition:background .2s}
+button.submit-btn:hover{background:#7dd3fc}
+button.submit-btn:disabled{opacity:.6;cursor:not-allowed}
+#status{min-height:24px;color:#f87171;margin-top:14px;font-size:13.5px;text-align:center;line-height:1.4}
+#status.loading{color:var(--accent)}
+#status.success{color:var(--success)}
 </style>
 </head>
 <body><main>
-<h1>Outlander Bridge párosítása</h1>
-<p>Add meg a jármű VIN-jét és az admin felületen kapott pairing code-ot. A többi beállítást a szerver tölti le.</p>
+<div class="header">
+  <div class="logo">⚡</div>
+  <div>
+    <h1>Outlander Connect</h1>
+  </div>
+</div>
+<p>Add meg a jármű alvázszámát (VIN), a párosítási kódot, valamint az autó gyári Wi-Fi adatait a csatlakozáshoz.</p>
+
 <form id="pair-form">
-<label for="vin">VIN</label><input id="vin" name="vin" minlength="17" maxlength="17" autocomplete="off" required>
-<label for="pairingCode">Pairing code</label><input id="pairingCode" name="pairingCode" autocomplete="off" required>
-<button id="submit" type="submit">Párosítás és beállítás</button>
-<div id="status" role="status"></div>
+  <div class="form-group">
+    <label for="vin">Jármű Alvázszám (VIN)</label>
+    <input id="vin" name="vin" minlength="17" maxlength="17" placeholder="pl. JMBXDGG2W..." autocomplete="off" style="text-transform:uppercase" required>
+    <div class="tip">17 karakteres azonosító a forgalmiban vagy a szélvédő alatt.</div>
+  </div>
+
+  <div class="form-group">
+    <label for="pairingCode">Párosítási Kód (Pairing Code)</label>
+    <input id="pairingCode" name="pairingCode" placeholder="pl. AB12CD34" autocomplete="off" style="text-transform:uppercase" required>
+    <div class="tip">Az Outlander Connect appban vagy a modul dobozán található kód.</div>
+  </div>
+
+  <div class="form-group">
+    <div class="label-row">
+      <label for="carWifiSsid">Autó Gyári Wi-Fi Neve (SSID)</label>
+      <button type="button" class="btn-scan" id="btn-scan">🔍 Keresés</button>
+    </div>
+    <select id="scan-select" style="display:none;margin-bottom:8px"></select>
+    <input id="carWifiSsid" name="carWifiSsid" placeholder="pl. REMOTE49a8bc" autocomplete="off" required>
+    <div class="tip">A szervizkönyvben lévő fehér kártyáról (mindig REMOTE-mal kezdődik).</div>
+  </div>
+
+  <div class="form-group">
+    <label for="carWifiPassword">Autó Gyári Wi-Fi Jelszava</label>
+    <div class="input-wrap">
+      <input id="carWifiPassword" name="carWifiPassword" type="password" placeholder="10 vagy 14 karakteres WPA jelszó" autocomplete="off" required>
+      <button type="button" class="btn-toggle-pw" id="btn-toggle-pw" aria-label="Jelszó mutatása">👁️</button>
+    </div>
+    <div class="tip">A gyári fehér kártyán lévő WPA jelszó (kis- és nagybetű érzékeny).</div>
+  </div>
+
+  <button id="submit" class="submit-btn" type="submit">Mentés és Csatlakozás</button>
+  <div id="status" role="status"></div>
 </form>
+
 <form id="provision-form" action="/save" method="POST"></form>
 </main>
+
 <script>
-const apiBase=")rawliteral") + DEFAULT_BACKEND_API_URL + R"rawliteral(";
-const form=document.getElementById("pair-form");
-const button=document.getElementById("submit");
-const status=document.getElementById("status");
-form.addEventListener("submit",async event=>{
+const apiBase = ")rawliteral") + DEFAULT_BACKEND_API_URL + R"rawliteral(";
+const form = document.getElementById("pair-form");
+const button = document.getElementById("submit");
+const status = document.getElementById("status");
+const btnScan = document.getElementById("btn-scan");
+const scanSelect = document.getElementById("scan-select");
+const inpSsid = document.getElementById("carWifiSsid");
+const inpPw = document.getElementById("carWifiPassword");
+const btnTogglePw = document.getElementById("btn-toggle-pw");
+
+btnTogglePw.addEventListener("click", () => {
+  if (inpPw.type === "password") {
+    inpPw.type = "text";
+    btnTogglePw.textContent = "🔒";
+  } else {
+    inpPw.type = "password";
+    btnTogglePw.textContent = "👁️";
+  }
+});
+
+btnScan.addEventListener("click", async () => {
+  btnScan.disabled = true;
+  btnScan.textContent = "⏳ Keresés...";
+  try {
+    const res = await fetch("/scan");
+    const nets = await res.json();
+    if (Array.isArray(nets) && nets.length > 0) {
+      scanSelect.innerHTML = '<option value="">-- Válassz a talált Wi-Fi hálózatok közül --</option>';
+      let foundRemote = false;
+      nets.forEach(n => {
+        if (!n.ssid) return;
+        const opt = document.createElement("option");
+        opt.value = n.ssid;
+        opt.textContent = (n.ssid.startsWith("REMOTE") ? "🚗 " : "📶 ") + n.ssid + (n.rssi ? " (" + n.rssi + " dBm)" : "");
+        if (n.ssid.startsWith("REMOTE")) {
+          if (!foundRemote) {
+            opt.selected = true;
+            inpSsid.value = n.ssid;
+            foundRemote = true;
+          }
+        }
+        scanSelect.appendChild(opt);
+      });
+      scanSelect.style.display = "block";
+    } else {
+      status.className = "";
+      status.textContent = "Nem található Wi-Fi hálózat a modul közelében.";
+    }
+  } catch (e) {
+    status.className = "";
+    status.textContent = "A hálózatkeresés nem sikerült.";
+  } finally {
+    btnScan.disabled = false;
+    btnScan.textContent = "🔍 Keresés";
+  }
+});
+
+scanSelect.addEventListener("change", () => {
+  if (scanSelect.value) {
+    inpSsid.value = scanSelect.value;
+  }
+});
+
+form.addEventListener("submit", async event => {
   event.preventDefault();
-  button.disabled=true;
-  status.textContent="Járműadatok lekérése…";
-  try{
-    const response=await fetch(apiBase+"/api/vehicles/lookup",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({vin:document.getElementById("vin").value.trim(),pairingCode:document.getElementById("pairingCode").value.trim()})
+  const vin = document.getElementById("vin").value.trim().toUpperCase();
+  const pairingCode = document.getElementById("pairingCode").value.trim().toUpperCase();
+  const carSsid = inpSsid.value.trim();
+  const carPw = inpPw.value.trim();
+
+  if (vin.length !== 17) {
+    status.className = "";
+    status.textContent = "Az alvázszámnak (VIN) pontosan 17 karakterből kell állnia!";
+    return;
+  }
+  if (!carSsid) {
+    status.className = "";
+    status.textContent = "Kérjük, add meg az autó gyári Wi-Fi nevét (REMOTE...)!";
+    return;
+  }
+  if (!carPw) {
+    status.className = "";
+    status.textContent = "Kérjük, add meg az autó gyári Wi-Fi jelszavát!";
+    return;
+  }
+
+  button.disabled = true;
+  status.className = "loading";
+  status.textContent = "Jármű hitelesítése és felhőkapcsolat beállítása…";
+
+  try {
+    const response = await fetch(apiBase + "/api/vehicles/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vin: vin,
+        pairingCode: pairingCode,
+        carWifiSsid: carSsid,
+        carWifiPassword: carPw
+      })
     });
-    const data=await response.json();
-    if(!response.ok||!data.success) throw new Error(data.error||"A párosítás nem sikerült.");
-    if(!data.username||!data.password||!data.topic_prefix) throw new Error("A backend nem adott vissza teljes MQTT hitelesítést.");
-    if(!data.carWifiSsid||!data.carWifiPassword) throw new Error("A jármű Wi-Fi adatai hiányoznak a szerver járműbeállításaiból.");
-    if(!data.brokerUrl) throw new Error("A backend MQTT címe nincs beállítva.");
-    const broker=new URL(data.brokerUrl);
-    if(broker.protocol!=="wss:"||!broker.hostname) throw new Error("A broker címnek wss:// formátumúnak kell lennie.");
-    const settings=data.settings||{};
-    const values={
-      vehicle_vin:data.vin,
-      wifi_ssid:data.carWifiSsid,
-      wifi_pass:data.carWifiPassword,
-      lte_apn:settings.lteApn||settings.lte_apn||"",
-      mqtt_server:broker.hostname,
-      mqtt_port:broker.port||443,
-      mqtt_path:broker.pathname||"/mqtt",
-      mqtt_user:data.username,
-      mqtt_pass:data.password,
-      mqtt_prefix:data.topic_prefix,
-      ha_disc:"1"
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || "A párosítás nem sikerült.");
+    if (!data.username || !data.password || !data.topic_prefix) throw new Error("A backend nem adott vissza teljes MQTT hitelesítést.");
+    if (!data.brokerUrl) throw new Error("A backend MQTT címe nincs beállítva.");
+
+    const broker = new URL(data.brokerUrl);
+    if (broker.protocol !== "wss:" || !broker.hostname) throw new Error("A broker címnek wss:// formátumúnak kell lennie.");
+
+    const settings = data.settings || {};
+    const values = {
+      vehicle_vin: data.vin || vin,
+      wifi_ssid: carSsid,
+      wifi_pass: carPw,
+      lte_apn: settings.lteApn || settings.lte_apn || "",
+      mqtt_server: broker.hostname,
+      mqtt_port: broker.port || 443,
+      mqtt_path: broker.pathname || "/mqtt",
+      mqtt_user: data.username,
+      mqtt_pass: data.password,
+      mqtt_prefix: data.topic_prefix,
+      ha_disc: "1"
     };
-    const target=document.getElementById("provision-form");
+
+    const target = document.getElementById("provision-form");
     target.replaceChildren();
-    for(const [name,value] of Object.entries(values)){
-      const input=document.createElement("input");
-      input.type="hidden";input.name=name;input.value=String(value);
+    for (const [name, value] of Object.entries(values)) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = String(value);
       target.appendChild(input);
     }
-    status.textContent="Párosítás sikeres, az eszköz újraindul…";
+
+    status.className = "success";
+    status.textContent = "✅ Sikeres párosítás! Az eszköz újraindul és csatlakozik az autóhoz...";
     target.submit();
-  }catch(error){
-    status.textContent=error.message||"Nem érhető el a backend. Ellenőrizd a mobilinternetet és próbáld újra.";
-    button.disabled=false;
+  } catch (error) {
+    status.className = "";
+    status.textContent = error.message || "Nem érhető el a felhőszerver. Ellenőrizd a mobilinterneted és próbáld újra.";
+    button.disabled = false;
   }
 });
 </script>
